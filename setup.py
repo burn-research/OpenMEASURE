@@ -11,5 +11,8 @@ setup(
       package_dir={'':'src'},
       long_description=long_description,
       long_description_content_type='text/markdown',
-      install_requires=['numpy>=1.19', 'scipy>=1.5']
+      install_requires=['numpy>=1.19', 'scipy>=1.5'],
+      url='https://github.com/albertoprocacci/OpenMEASURE',
+      author='Alberto Procacci',
+      author_email='alberto.procacci@gmail.com',
       )
