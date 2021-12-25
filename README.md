@@ -6,13 +6,13 @@ OpenMEASURE is an open source software for soft sensing applications.
 
 Run the following command to install:
 
-'''python
+'''
 pip install OpenMEASURE
 '''
 
 ## Usage
 
-'''python
+'''
 from sparse_sensing import SPR
 import numpy as np
 
