@@ -21,7 +21,7 @@ class SPR():
         self.n_features = n_features
         
     
-    def optimal_placement(self):
+    def optimal_placement(self, select_modes='variance', n_modes=99):
         n = self.X.shape[0]
         m = self.X.shape[1]
 
@@ -46,10 +46,13 @@ class SPR():
         L = S**2    # Compute the eigenvalues
         exp_variance = 100*np.cumsum(L)/np.sum(L)
         
+        if select_modes == 'variance':
         # The r-order truncation is selected based on the amount of variance recovered
-        for r in range(exp_variance.size):
-            if exp_variance[r]>99.5:
-                break
+            for r in range(exp_variance.size):
+                if exp_variance[r]>n_modes:
+                    break
+        elif select_modes == 'number':
+            r = n_modes
         
         # Reduce the dimensionality
         Ur = U[:,:r]
