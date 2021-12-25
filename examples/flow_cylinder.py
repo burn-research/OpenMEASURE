@@ -14,7 +14,7 @@ ndy = 449
 
 xdim = np.arange(0, ndx)
 ydim = np.arange(0, ndy)
-
+    
 xgrid, ygrid = np.meshgrid(xdim, ydim)
 
 f = 1
@@ -23,3 +23,5 @@ ugrid = u.reshape(ndy, ndx)
 
 mp.pyplot.contourf(xgrid, ygrid, ugrid)
 mp.pyplot.show()
+
+spr = SPR(X, 2)
