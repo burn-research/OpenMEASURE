@@ -21,7 +21,7 @@ class SPR():
         self.n_features = n_features
         
     
-    def optimal_placemenent(self):
+    def optimal_placement(self):
         n = self.X.shape[0]
         m = self.X.shape[1]
 
@@ -57,11 +57,10 @@ class SPR():
         # Calculate the QRCP 
         print('Computing the QRCP and calculating C...')
         Q, R, P = la.qr(Ur.T, pivoting=True, mode='economic')
-        p = P.size
+        p = r
         C = np.zeros((p, n))
         for j in range(p):
             C[j,P[j]] = 1
         
         return C
-    
 
