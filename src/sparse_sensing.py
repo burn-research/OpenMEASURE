@@ -65,9 +65,3 @@ class SPR():
         return C
     
 
-X = np.load('/Users/alberto/Documents/Digital_twin_ss/X_3D.npy')
-
-spr = SPR(X,9)
-C = spr.optimal_placemenent()
-
-
