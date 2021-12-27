@@ -16,12 +16,11 @@ import scipy.linalg as la
 
 
 class SPR():
-
     '''
     Class used for Sparse Placement for Reconstruction (SPR)
     
     Attributes
-    ---
+    ----------
     X : numpy array
         data matrix of dimensions (n,p) where n = n_features * n_points and p
         is the number of operating conditions.
@@ -30,7 +29,7 @@ class SPR():
         the number of features in the dataset (temperature, velocity, etc.).
         
     Methods
-    ---
+    ----------
     scale_data(scale_type='standard')
         Scale the data.
     
@@ -92,7 +91,7 @@ class SPR():
         n = self.X.shape[0]
         m = self.X.shape[1]
         X0 = np.zeros_like(self.X)
-        n_points = n // self.n_features
+        self.n_points = n // self.n_features
 
         if scale_type == 'standard':
             # Scale the matrix to unitary variance
@@ -101,10 +100,10 @@ class SPR():
             print('Scaling the matrix...')
             for i in range(self.n_features):
                 for j in range(m):
-                    x = self.X[i*n_points:(i+1)*n_points, j]
+                    x = self.X[i*self.n_points:(i+1)*self.n_points, j]
                     mean_matrix[i, j] = np.average(x)
                     std_matrix[i, j] = np.std(x)
-                    X0[i*n_points:(i+1)*n_points, j] = (x -
+                    X0[i*self.n_points:(i+1)*self.n_points, j] = (x -
                                                         mean_matrix[i, j])/std_matrix[i, j]
 
             self.mean_matrix = mean_matrix
@@ -135,8 +134,9 @@ class SPR():
         
         if scale_type == 'standard':
             for i in range(self.n_features):
-                x[i*n_points:(i+1)*n_points] = np.average(self.std_matrix[i,:]) * x0[i*n_points:(i+1)*n_points] + np.average(self.mean_matrix[i,:])
-
+                x[i*self.n_points:(i+1)*self.n_points] = np.average(self.std_matrix[i,:]) * \
+                x0[i*self.n_points:(i+1)*self.n_points] + np.average(self.mean_matrix[i,:])
+                
         return x
 
     def decomposition(self, X0, decomp_type='POD'):
@@ -298,5 +298,3 @@ class SPR():
         
         x_rec = SPR.unscale_data(self, x0_rec, scale_type)
         return x_rec
-
-
