@@ -113,6 +113,34 @@ class SPR():
 
         return X0
 
+    def scale_vector(self, y, scale_type):
+        '''
+        Return the scaled measurement vector.
+
+        Parameters
+        ----------
+        y : numpy array
+            Measurement vector to scale, size (s,2). The first column contains
+            the measurements, the second column contains which feature is 
+            measured.
+        scale_type : str
+            Type of scaling.
+
+        Returns
+        -------
+        y0: numpy array
+            The scaled measurement vector.
+
+        '''
+        
+        y0 = np.zeros((y.shape[0],))
+        if scale_type == 'standard':
+            for i in range(y0.shape[0]):
+                y0[i] = (y[i,0] - np.average(self.mean_matrix[int(y[i,1]),:])) \
+                    /np.average(self.std_matrix[int(y[i,1]),:])
+        
+        return y0
+            
     def unscale_data(self, x0, scale_type):
         '''
         Return the unscaled vector.
@@ -130,6 +158,7 @@ class SPR():
             The unscaled vector.
 
         '''
+        
         x = np.zeros_like(x0)
         
         if scale_type == 'standard':
@@ -269,7 +298,9 @@ class SPR():
         
         Theta = C @ Ur
         self.Theta = Theta
-        ar, res, rank, s = la.lstsq(Theta, y)
+        
+        y0 = SPR.scale_vector(self, y, scale_type)
+        ar, res, rank, s = la.lstsq(Theta, y0)
         x0_rec = Ur @ ar
         
         x_rec = SPR.unscale_data(self, x0_rec, scale_type)
@@ -298,3 +329,5 @@ class SPR():
         
         x_rec = SPR.unscale_data(self, x0_rec, scale_type)
         return x_rec
+
+
