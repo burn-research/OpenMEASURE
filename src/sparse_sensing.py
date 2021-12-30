@@ -277,7 +277,9 @@ class SPR():
         C : numpy array
             The measurement matrix, size (s,n).
         y : numpy array
-            The measurement vector, size (s,).
+            The measurement vector, size (s,2). The first column contains
+            the measurements, the second column contains which feature is 
+            measured.
         scale_type : str, optional
             Type of scaling method. The default is 'standard'.
         select_modes : str, optional
@@ -314,7 +316,9 @@ class SPR():
         Parameters
         ----------
         y : numpy array
-            The measurement vector, size (s,).
+            The measurement vector, size (s,2). The first column contains
+            the measurements, the second column contains which feature is 
+            measured.
         scale_type : int, optional
             The type of scaling. The default is 'standard'.
 
