@@ -293,6 +293,7 @@ class SPR():
             The predicted state of the system, size (n,).
 
         '''
+        self.scale_type = scale_type
         X0 = SPR.scale_data(self, scale_type)
         U, exp_variance = SPR.decomposition(self, X0)
         Ur = SPR.reduction(self, U, exp_variance, select_modes, n_modes)
@@ -308,7 +309,7 @@ class SPR():
         x_rec = SPR.unscale_data(self, x0_rec, scale_type)
         return x_rec
     
-    def predict(self, y, scale_type='standard'):
+    def predict(self, y):
         '''
         Return the prediction vector. 
         This method has to be used after fit_predict.
@@ -328,10 +329,10 @@ class SPR():
             The reconstructed error, size (n,).
 
         '''
-        ar, res, rank, s = la.lstsq(self.Theta, y)
+        
+        y0 = SPR.scale_vector(self, y, self.scale_type)
+        ar, res, rank, s = la.lstsq(self.Theta, y0)
         x0_rec = self.Ur @ ar
         
-        x_rec = SPR.unscale_data(self, x0_rec, scale_type)
+        x_rec = SPR.unscale_data(self, x0_rec, self.scale_type)
         return x_rec
-
-
