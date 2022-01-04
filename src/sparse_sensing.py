@@ -68,8 +68,13 @@ class SPR():
         None.
 
         '''
-        self.X = X
-        self.n_features = n_features
+        if type(X) is not np.ndarray:
+            raise TypeError('The matrix X is not a numpy array.')
+        elif type(n_features) is not int:
+             raise TypeError('The parameter n_features is not an integer.')
+        else:
+           self.X = X
+           self.n_features = n_features
 
     def scale_data(self, scale_type='standard'):
         '''
@@ -79,7 +84,8 @@ class SPR():
         Parameters
         ----------
         scale_type : str, optional
-            Type of scaling. The default is 'standard'.
+            Type of scaling. The default is 'standard'. For now, it is the only
+            method implemented.
 
         Returns
         -------
@@ -90,14 +96,17 @@ class SPR():
         
         n = self.X.shape[0]
         m = self.X.shape[1]
-        X0 = np.zeros_like(self.X)
         self.n_points = n // self.n_features
+        if n % self.n_features != 0:
+            raise Exception('The number of rows of X is not a multiple of n_features')
+            exit()
+        
+        X0 = np.zeros_like(self.X)
 
         if scale_type == 'standard':
             # Scale the matrix to unitary variance
             mean_matrix = np.zeros((self.n_features, m))
             std_matrix = np.zeros((self.n_features, m))
-            print('Scaling the matrix...')
             for i in range(self.n_features):
                 for j in range(m):
                     x = self.X[i*self.n_points:(i+1)*self.n_points, j]
@@ -109,7 +118,8 @@ class SPR():
             self.mean_matrix = mean_matrix
             self.std_matrix = std_matrix
         else:
-            'raise exception'
+            raise NotImplementedError('The scaling method selected has not been '\
+                                      'implemented yet')
 
         return X0
 
@@ -138,6 +148,9 @@ class SPR():
             for i in range(y0.shape[0]):
                 y0[i] = (y[i,0] - np.average(self.mean_matrix[int(y[i,1]),:])) \
                     /np.average(self.std_matrix[int(y[i,1]),:])
+        else:
+            raise NotImplementedError('The scaling method selected has not been '\
+                                      'implemented yet')
         
         return y0
             
@@ -165,7 +178,10 @@ class SPR():
             for i in range(self.n_features):
                 x[i*self.n_points:(i+1)*self.n_points] = np.average(self.std_matrix[i,:]) * \
                 x0[i*self.n_points:(i+1)*self.n_points] + np.average(self.mean_matrix[i,:])
-                
+        else:
+            raise NotImplementedError('The scaling method selected has not been '\
+                                      'implemented yet')  
+        
         return x
 
     def decomposition(self, X0, decomp_type='POD'):
@@ -189,11 +205,13 @@ class SPR():
         '''
         if decomp_type == 'POD':
             # Compute the SVD of the scaled dataset
-            print('Computing the SVD...')
             U, S, Vt = np.linalg.svd(X0, full_matrices=False)
             L = S**2    # Compute the eigenvalues
             exp_variance = 100*np.cumsum(L)/np.sum(L)
-
+        else:
+            raise NotImplementedError('The decomposition method selected has not been '\
+                                      'implemented yet')
+                
         return U, exp_variance
 
     def reduction(self, U, exp_variance, select_modes, n_modes):
@@ -209,7 +227,10 @@ class SPR():
         select_modes : str
             Method of modes selection.
         n_modes : int or float
-            Parameter that controls the number of modes to be retained.
+            Parameter that controls the number of modes to be retained. If 
+            select_modes = 'variance', n_modes can be a float between 0 and 100. 
+            If select_modes = 'number', n_modes can be an integer between 1 and m.
+            
 
         Returns
         -------
@@ -218,12 +239,21 @@ class SPR():
 
         '''
         if select_modes == 'variance':
+            if not 0 <= n_modes <= 100: 
+                raise ValueError('The parameter n_modes is outside the[0-100] range.')
+                
             # The r-order truncation is selected based on the amount of variance recovered
             for r in range(exp_variance.size):
                 if exp_variance[r] > n_modes:
                     break
         elif select_modes == 'number':
+            if not type(n_modes) is int:
+                raise TypeError('The parameter n_modes is not an integer.')
+            if not 1 <= n_modes <= U.shape[1]: 
+                raise ValueError('The parameter n_modes is outside the [1-m] range.')
             r = n_modes
+        else:
+            raise ValueError('The select_mode value is wrong.')
 
         # Reduce the dimensionality
         Ur = U[:, :r]
@@ -258,11 +288,10 @@ class SPR():
         r = Ur.shape[1]
 
         # Calculate the QRCP
-        print('Computing the QRCP and calculating C...')
         Q, R, P = la.qr(Ur.T, pivoting=True, mode='economic')
-        p = r
-        C = np.zeros((p, n))
-        for j in range(p):
+        s = r
+        C = np.zeros((s, n))
+        for j in range(s):
             C[j, P[j]] = 1
 
         return C
@@ -293,6 +322,16 @@ class SPR():
             The predicted state of the system, size (n,).
 
         '''
+        if C.shape[0] != y.shape[0]:
+            raise ValueError('The number of rows of C does not match the number' \
+                             ' of rows of y.')
+        if C.shape[1] != self.X.shape[0]:
+            raise ValueError('The number of columns of C does not match the number' \
+                              ' of rows of X.')
+        if y.shape[1] != 2:
+            raise ValueError('The y array has the wrong number of columns. y has' \
+                              ' to have dimensions (s,2).')
+        
         self.scale_type = scale_type
         X0 = SPR.scale_data(self, scale_type)
         U, exp_variance = SPR.decomposition(self, X0)
@@ -302,11 +341,7 @@ class SPR():
         Theta = C @ Ur
         self.Theta = Theta
         
-        y0 = SPR.scale_vector(self, y, scale_type)
-        ar, res, rank, s = la.lstsq(Theta, y0)
-        x0_rec = Ur @ ar
-        
-        x_rec = SPR.unscale_data(self, x0_rec, scale_type)
+        x_rec = SPR.predict(self, y)
         return x_rec
     
     def predict(self, y):
@@ -329,10 +364,33 @@ class SPR():
             The reconstructed error, size (n,).
 
         '''
+        if hasattr(self, 'Theta'):
+            y0 = SPR.scale_vector(self, y, self.scale_type)
+            ar, res, rank, s = la.lstsq(self.Theta, y0)
+            x0_rec = self.Ur @ ar
         
-        y0 = SPR.scale_vector(self, y, self.scale_type)
-        ar, res, rank, s = la.lstsq(self.Theta, y0)
-        x0_rec = self.Ur @ ar
-        
-        x_rec = SPR.unscale_data(self, x0_rec, self.scale_type)
+            x_rec = SPR.unscale_data(self, x0_rec, self.scale_type)
+        else:
+            raise AttributeError('The function fit_predict has to be called '\
+                                 'before calling predict.')
+            
         return x_rec
+
+
+# X = 'test'
+X = np.random.rand(15, 5)
+spr = SPR(X, 5)
+
+C = spr.optimal_placement()
+U, e = spr.decomposition(X, decomp_type='POD')
+U = spr.reduction(U, e, select_modes='number', n_modes=3)
+
+y = np.array([[1.2,0],
+              [1.1,0],
+              [3.1, 0],
+             [4.1, 1]])
+
+x_rec = spr.fit_predict(C, y)
+x_rec = spr.predict(y)
+
+
