@@ -95,7 +95,6 @@ class SPR():
         '''
         
         n = self.X.shape[0]
-        m = self.X.shape[1]
         self.n_points = n // self.n_features
         if n % self.n_features != 0:
             raise Exception('The number of rows of X is not a multiple of n_features')
@@ -105,18 +104,17 @@ class SPR():
 
         if scale_type == 'standard':
             # Scale the matrix to unitary variance
-            mean_matrix = np.zeros((self.n_features, m))
-            std_matrix = np.zeros((self.n_features, m))
+            mean_vector = np.zeros((self.n_features))
+            std_vector = np.zeros((self.n_features))
             for i in range(self.n_features):
-                for j in range(m):
-                    x = self.X[i*self.n_points:(i+1)*self.n_points, j]
-                    mean_matrix[i, j] = np.average(x)
-                    std_matrix[i, j] = np.std(x)
-                    X0[i*self.n_points:(i+1)*self.n_points, j] = (x -
-                                                        mean_matrix[i, j])/std_matrix[i, j]
+                x = self.X[i*self.n_points:(i+1)*self.n_points, :]
+                mean_vector[i] = np.average(x)
+                std_vector[i] = np.std(x)
+                X0[i*self.n_points:(i+1)*self.n_points, :] = (x -
+                                                    mean_vector[i])/std_vector[i]
 
-            self.mean_matrix = mean_matrix
-            self.std_matrix = std_matrix
+            self.mean_vector = mean_vector
+            self.std_vector = std_vector
         else:
             raise NotImplementedError('The scaling method selected has not been '\
                                       'implemented yet')
@@ -146,8 +144,7 @@ class SPR():
         y0 = np.zeros((y.shape[0],))
         if scale_type == 'standard':
             for i in range(y0.shape[0]):
-                y0[i] = (y[i,0] - np.average(self.mean_matrix[int(y[i,1]),:])) \
-                    /np.average(self.std_matrix[int(y[i,1]),:])
+                y0[i] = (y[i,0] - self.mean_vector[int(y[i,1])]) / self.std_vector[int(y[i,1])]
         else:
             raise NotImplementedError('The scaling method selected has not been '\
                                       'implemented yet')
@@ -176,8 +173,8 @@ class SPR():
         
         if scale_type == 'standard':
             for i in range(self.n_features):
-                x[i*self.n_points:(i+1)*self.n_points] = np.average(self.std_matrix[i,:]) * \
-                x0[i*self.n_points:(i+1)*self.n_points] + np.average(self.mean_matrix[i,:])
+                x[i*self.n_points:(i+1)*self.n_points] = self.std_vector[i] * \
+                x0[i*self.n_points:(i+1)*self.n_points] + self.mean_vector[i]
         else:
             raise NotImplementedError('The scaling method selected has not been '\
                                       'implemented yet')  
@@ -377,20 +374,21 @@ class SPR():
         return x_rec
 
 
-# X = 'test'
-X = np.random.rand(15, 5)
-spr = SPR(X, 5)
 
-C = spr.optimal_placement()
-U, e = spr.decomposition(X, decomp_type='POD')
-U = spr.reduction(U, e, select_modes='number', n_modes=3)
-
-y = np.array([[1.2,0],
-              [1.1,0],
-              [3.1, 0],
-             [4.1, 1]])
-
-x_rec = spr.fit_predict(C, y)
-x_rec = spr.predict(y)
+if __name__ == '__main__':
+    X = np.random.rand(15, 5)
+    spr = SPR(X, 5)
+    
+    C = spr.optimal_placement()
+    U, e = spr.decomposition(X, decomp_type='POD')
+    U = spr.reduction(U, e, select_modes='number', n_modes=3)
+    
+    y = np.array([[1.2,0],
+                  [1.1,0],
+                  [3.1, 0],
+                 [4.1, 1]])
+    
+    x_rec = spr.fit_predict(C, y)
+    x_rec = spr.predict(y)
 
 
