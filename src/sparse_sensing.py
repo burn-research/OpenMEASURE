@@ -45,11 +45,12 @@ class SPR():
     optimal_placement(scale_type='standard', select_modes='variance', n_modes=99)
         Calculates the C matrix using QRCP decomposition.
     
-    fit_predict(C, y, scale_type='standard', select_modes='variance', n_modes=99)
-        Calculates the Theta matrix, then predicts x.
+    fit_predict(C, y, scale_type='standard', select_modes='variance', 
+                n_modes=99)
+        Calculates the Theta matrix, then predicts ar and reconstructs x.
     
     predict(y, scale_type='standard'):
-        Predicts x.
+        Predicts ar and reconstructs x.
     
     '''
 
@@ -266,9 +267,12 @@ class SPR():
         scale_type : str, optional
             Type of scaling. The default is 'standard'.
         select_modes : str, optional
-            Type of mode selection. The default is 'variance'.
+            Type of mode selection. The default is 'variance'. The available 
+            options are 'variance' or 'number'.
         n_modes : int or float, optional
-            Parameters that control the amount of modes retained. The default is 99.
+            Parameters that control the amount of modes retained. The default is 
+            99, which represents 99% of the variance. If select_modes='number',
+            n_modes represents the number of modes retained.
 
         Returns
         -------
@@ -293,7 +297,8 @@ class SPR():
 
         return C
 
-    def fit_predict(self, C, y, scale_type='standard', select_modes='variance', n_modes=99):
+    def fit_predict(self, C, y, scale_type='standard', select_modes='variance', 
+                    n_modes=99):
         '''
         Fit the taylored basis and the measurement matrix.
         Return the prediction vector.
@@ -309,12 +314,17 @@ class SPR():
         scale_type : str, optional
             Type of scaling method. The default is 'standard'.
         select_modes : str, optional
-            Type of mode selection. The default is 'variance'.
-        n_modes : str, optional
-            Parameter that controls the amount of modes retained. The default is 99.
+            Type of mode selection. The default is 'variance'. The available 
+            options are 'variance' or 'number'.
+        n_modes : int or float, optional
+            Parameters that control the amount of modes retained. The default is 
+            99, which represents 99% of the variance. If select_modes='number',
+            n_modes represents the number of modes retained.
 
         Returns
         -------
+        ar : numpy array
+            The low-dimensional projection of the state of the system, size (r,)
         x_rec : numpy array
             The predicted state of the system, size (n,).
 
@@ -338,8 +348,8 @@ class SPR():
         Theta = C @ Ur
         self.Theta = Theta
         
-        x_rec = SPR.predict(self, y)
-        return x_rec
+        ar, x_rec = SPR.predict(self, y)
+        return ar, x_rec
     
     def predict(self, y):
         '''
@@ -357,6 +367,8 @@ class SPR():
 
         Returns
         -------
+        ar : numpy array
+            The low-dimensional projection of the state of the system, size (r,)
         x_rec : numpy array
             The reconstructed error, size (n,).
 
@@ -371,7 +383,7 @@ class SPR():
             raise AttributeError('The function fit_predict has to be called '\
                                  'before calling predict.')
             
-        return x_rec
+        return ar, x_rec
 
 
 
@@ -388,7 +400,7 @@ if __name__ == '__main__':
                   [3.1, 0],
                  [4.1, 1]])
     
-    x_rec = spr.fit_predict(C, y)
-    x_rec = spr.predict(y)
+    ar, x_rec = spr.fit_predict(C, y)
+    ar, x_rec = spr.predict(y)
 
 

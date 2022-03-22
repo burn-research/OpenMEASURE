@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
 
 setup(
       name='OpenMEASURE',
-      version='0.0.8',
+      version='0.0.9',
       description='Python package for soft sensing applications',
       py_modules=['sparse_sensing'],
       package_dir={'':'src'},
