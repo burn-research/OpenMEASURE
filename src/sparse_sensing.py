@@ -348,6 +348,15 @@ class SPR():
         Theta = C @ Ur
         self.Theta = Theta
         
+        # calculate the condition number
+        if Theta.shape[0] == Theta.shape[1]:
+            U_theta, S_theta, V_thetat = np.linalg.svd(Theta)
+            self.k = S_theta[0]/S_theta[-1]
+        else:
+            Theta_pinv = np.linalg.pinv(Theta)
+            U_theta, S_theta, V_thetat = np.linalg.svd(Theta_pinv)
+            self.k = S_theta[0]/S_theta[-1]
+        
         ar, x_rec = SPR.predict(self, y)
         return ar, x_rec
     
@@ -402,5 +411,4 @@ if __name__ == '__main__':
     
     ar, x_rec = spr.fit_predict(C, y)
     ar, x_rec = spr.predict(y)
-
-
+    print(spr.k)
