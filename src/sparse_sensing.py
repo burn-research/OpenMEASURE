@@ -430,7 +430,6 @@ class SPR(ROM):
         return ar, x_rec
 
 
-
 if __name__ == '__main__':
     X = np.random.rand(15, 5)
     spr = SPR(X, 5)

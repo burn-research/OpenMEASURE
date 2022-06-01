@@ -18,7 +18,8 @@ from gpytorch.means import ConstantMean
 from gpytorch.kernels import ScaleKernel, MaternKernel
 from gpytorch.distributions import MultitaskMultivariateNormal, MultivariateNormal
 from gpytorch.mlls import ExactMarginalLogLikelihood
-from sparse_sensing import ROM
+# from sparse_sensing import *
+import sparse_sensing as sps
 
 class BatchIndipendentMultitaskGPModel(gpytorch.models.ExactGP):
     '''
@@ -70,7 +71,7 @@ class BatchIndipendentMultitaskGPModel(gpytorch.models.ExactGP):
         return MultitaskMultivariateNormal.from_batch_mvn(MultivariateNormal(mean_x, kernel_x))
     
 
-class GPR(ROM):
+class GPR(sps.ROM):
     '''
     Class used for building a GPR-based ROM.
     
