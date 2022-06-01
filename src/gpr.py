@@ -192,9 +192,9 @@ class GPR(sps.ROM):
         '''
         
         self.scale_type = scale_type
-        X0 = sps.ROM.scale_data(self, scale_type)
-        U, A, exp_variance = sps.ROM.decomposition(self, X0)
-        Ur, Ar = sps.ROM.reduction(self, U, A, exp_variance, select_modes, n_modes)
+        X0 = self.scale_data(scale_type)
+        U, A, exp_variance = self.decomposition(X0)
+        Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
         self.Ur = Ur
         self.Ar = Ar
         self.r = Ar.shape[1]
@@ -324,7 +324,8 @@ class GPR(sps.ROM):
         n = self.Ur.shape[0]
         X_rec = np.zeros((n, n_p))
         for i in range(n_p):
-            X_rec[:,i] = self.Ur @ Ar[i,:]
+            x0_rec = self.Ur @ Ar[i,:]
+            X_rec[:,i] = self.unscale_data(x0_rec, self.scale_type)
 
         return X_rec
     
@@ -339,5 +340,3 @@ if __name__ == '__main__':
     P_test = P[0:3,:] + 1
     Ap, Sigma = gpr.fit_predict(P_test)
     X_rec = gpr.reconstruct(Ap)
-    
-    
