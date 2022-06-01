@@ -10,14 +10,13 @@ MODULE: sparse_sensing.py
     Please report any bug to: alberto.procacci@ulb.be
 '''
 
-import os
 import numpy as np
 import scipy.linalg as la
 
 
-class SPR():
+class ROM():
     '''
-    Class used for Sparse Placement for Reconstruction (SPR)
+    Class containing utilities for Reduced-Order-Models building.
     
     Attributes
     ----------
@@ -41,16 +40,6 @@ class SPR():
         
     reduction(U, exp_variance, select_modes, n_modes)
         Perform the dimensionality reduction.
-
-    optimal_placement(scale_type='standard', select_modes='variance', n_modes=99)
-        Calculates the C matrix using QRCP decomposition.
-    
-    fit_predict(C, y, scale_type='standard', select_modes='variance', 
-                n_modes=99)
-        Calculates the Theta matrix, then predicts ar and reconstructs x.
-    
-    predict(y, scale_type='standard'):
-        Predicts ar and reconstructs x.
     
     '''
 
@@ -121,36 +110,6 @@ class SPR():
                                       'implemented yet')
 
         return X0
-
-    def scale_vector(self, y, scale_type):
-        '''
-        Return the scaled measurement vector.
-
-        Parameters
-        ----------
-        y : numpy array
-            Measurement vector to scale, size (s,2). The first column contains
-            the measurements, the second column contains which feature is 
-            measured.
-        scale_type : str
-            Type of scaling.
-
-        Returns
-        -------
-        y0: numpy array
-            The scaled measurement vector.
-
-        '''
-        
-        y0 = np.zeros((y.shape[0],))
-        if scale_type == 'standard':
-            for i in range(y0.shape[0]):
-                y0[i] = (y[i,0] - self.mean_vector[int(y[i,1])]) / self.std_vector[int(y[i,1])]
-        else:
-            raise NotImplementedError('The scaling method selected has not been '\
-                                      'implemented yet')
-        
-        return y0
             
     def unscale_data(self, x0, scale_type):
         '''
@@ -196,7 +155,11 @@ class SPR():
         Returns
         -------
         U : numpy array
-            The taylored basis used for SPR, size (n,p).
+            The taylored basis, size (n,p).
+        
+        A : numpy array
+            The coefficient matrix, size (p,p).
+            
         exp_variance : numpy array
             Array containing the explained variance of the modes, size (p,).
 
@@ -204,15 +167,16 @@ class SPR():
         if decomp_type == 'POD':
             # Compute the SVD of the scaled dataset
             U, S, Vt = np.linalg.svd(X0, full_matrices=False)
+            A = np.matmul(np.diag(S), Vt).T
             L = S**2    # Compute the eigenvalues
             exp_variance = 100*np.cumsum(L)/np.sum(L)
         else:
             raise NotImplementedError('The decomposition method selected has not been '\
                                       'implemented yet')
                 
-        return U, exp_variance
+        return U, A, exp_variance
 
-    def reduction(self, U, exp_variance, select_modes, n_modes):
+    def reduction(self, U, A, exp_variance, select_modes, n_modes):
         '''
         Return the reduced taylored basis.
 
@@ -220,6 +184,10 @@ class SPR():
         ----------
         U : numpy array
             The taylored basis to be reduced, size (n,p).
+        
+        A : numpy array
+            The coefficient matrix to be reduced, size (p,p).
+        
         exp_variance : numpy array
             The array containing the explained variance of the modes, size (p,).
         select_modes : str
@@ -234,6 +202,9 @@ class SPR():
         -------
         Ur : numpy array
             Reduced taylored basis, size (n,r).
+        
+        Ar : numpy array
+            Reduced taylored basis, size (p,r)
 
         '''
         if select_modes == 'variance':
@@ -255,8 +226,74 @@ class SPR():
 
         # Reduce the dimensionality
         Ur = U[:, :r]
+        Ar = A[:, :r]
 
-        return Ur
+        return Ur, Ar
+
+
+class SPR(ROM):
+    '''
+    Class used for Sparse Placement for Reconstruction (SPR)
+    
+    Attributes
+    ----------
+    X : numpy array
+        data matrix of dimensions (n,p) where n = n_features * n_points and p
+        is the number of operating conditions.
+    
+    n_features : int
+        the number of features in the dataset (temperature, velocity, etc.).
+        
+    Methods
+    ----------
+    scale_vector(y, scale_type='standard')
+        Scales the measurements matrix using the training information.
+
+    optimal_placement(scale_type='standard', select_modes='variance', n_modes=99)
+        Calculates the C matrix using QRCP decomposition.
+    
+    fit_predict(C, y, scale_type='standard', select_modes='variance', 
+                n_modes=99)
+        Calculates the Theta matrix, then predicts ar and reconstructs x.
+    
+    predict(y, scale_type='standard'):
+        Predicts ar and reconstructs x.
+    
+    '''
+
+    def __init__(self, X, n_features):
+        super().__init__(X, n_features)
+
+
+    def scale_vector(self, y, scale_type):
+        '''
+        Return the scaled measurement vector.
+
+        Parameters
+        ----------
+        y : numpy array
+            Measurement vector to scale, size (s,2). The first column contains
+            the measurements, the second column contains which feature is 
+            measured.
+        scale_type : str
+            Type of scaling.
+
+        Returns
+        -------
+        y0: numpy array
+            The scaled measurement vector.
+
+        '''
+        
+        y0 = np.zeros((y.shape[0],))
+        if scale_type == 'standard':
+            for i in range(y0.shape[0]):
+                y0[i] = (y[i,0] - self.mean_vector[int(y[i,1])]) / self.std_vector[int(y[i,1])]
+        else:
+            raise NotImplementedError('The scaling method selected has not been '\
+                                      'implemented yet')
+        
+        return y0
 
     def optimal_placement(self, scale_type='standard', select_modes='variance', n_modes=99):
         '''
@@ -284,8 +321,8 @@ class SPR():
         n = self.X.shape[0]
 
         X0 = SPR.scale_data(self, scale_type)
-        U, exp_variance = SPR.decomposition(self, X0)
-        Ur = SPR.reduction(self, U, exp_variance, select_modes, n_modes)
+        U, A, exp_variance = SPR.decomposition(self, X0)
+        Ur, Ar = SPR.reduction(self, U, A, exp_variance, select_modes, n_modes)
         r = Ur.shape[1]
 
         # Calculate the QRCP
@@ -341,8 +378,8 @@ class SPR():
         
         self.scale_type = scale_type
         X0 = SPR.scale_data(self, scale_type)
-        U, exp_variance = SPR.decomposition(self, X0)
-        Ur = SPR.reduction(self, U, exp_variance, select_modes, n_modes)
+        U, A, exp_variance = SPR.decomposition(self, X0)
+        Ur, Ar = SPR.reduction(self, U, A, exp_variance, select_modes, n_modes)
         self.Ur = Ur
         
         Theta = C @ Ur
@@ -371,8 +408,6 @@ class SPR():
             The measurement vector, size (s,2). The first column contains
             the measurements, the second column contains which feature is 
             measured.
-        scale_type : int, optional
-            The type of scaling. The default is 'standard'.
 
         Returns
         -------
@@ -401,8 +436,8 @@ if __name__ == '__main__':
     spr = SPR(X, 5)
     
     C = spr.optimal_placement()
-    U, e = spr.decomposition(X, decomp_type='POD')
-    U = spr.reduction(U, e, select_modes='number', n_modes=3)
+    U, A, e = spr.decomposition(X, decomp_type='POD')
+    Ur, Ar = spr.reduction(U, A, e, select_modes='number', n_modes=3)
     
     y = np.array([[1.2,0],
                   [1.1,0],
