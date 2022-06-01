@@ -192,9 +192,9 @@ class GPR(sps.ROM):
         '''
         
         self.scale_type = scale_type
-        X0 = ROM.scale_data(self, scale_type)
-        U, A, exp_variance = ROM.decomposition(self, X0)
-        Ur, Ar = ROM.reduction(self, U, A, exp_variance, select_modes, n_modes)
+        X0 = sps.ROM.scale_data(self, scale_type)
+        U, A, exp_variance = sps.ROM.decomposition(self, X0)
+        Ur, Ar = sps.ROM.reduction(self, U, A, exp_variance, select_modes, n_modes)
         self.Ur = Ur
         self.Ar = Ar
         self.r = Ar.shape[1]
