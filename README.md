@@ -36,8 +36,7 @@ import matplotlib.pyplot as plt
 import matplotlib.tri as tri
 
 # Replace this with the path where you saved the data directory
-#path = './data/ROM/'
-path = '/Users/alberto/Documents/OpenMEASURE/data/ROM/'
+path = './data/ROM/'
 
 # This is a n x m matrix where n = 165258 is the number of cells times the number of features
 # and m = 41 is the number of simulations.
