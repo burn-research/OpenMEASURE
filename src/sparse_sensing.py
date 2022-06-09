@@ -12,7 +12,8 @@ MODULE: sparse_sensing.py
 
 import numpy as np
 import scipy.linalg as la
-
+from scipy.stats import qmc
+import cvxpy as cp
 
 class ROM():
     '''
@@ -141,7 +142,8 @@ class ROM():
         
         return x
 
-    def decomposition(self, X0, decomp_type='POD'):
+    def decomposition(self, X0, decomp_type='POD', select_modes='variance', n_modes=99, 
+                      solver='ECOS', abstol=1e-3, verbose=False):
         '''
         Return the taylored basis and the amount of variance of the modes.
 
@@ -149,19 +151,40 @@ class ROM():
         ----------
         X0 : numpy array
             The scaled data matrix to be decomposed, size (n,p).
+        
         decomp_type : str, optional
             Type of decomposition. The default is 'POD'.
+            If 'CPOD' it will calculate the constrained POD scores.
+        
+        select_modes : str, optional
+            Method of modes selection.
+        
+        n_modes : int or float
+            Parameter that controls the number of modes to be retained. If 
+            select_modes = 'variance', n_modes can be a float between 0 and 100. 
+            If select_modes = 'number', n_modes can be an integer between 1 and m.
+
+        solver : str, optional
+            Type of solver to use for solving the constrained minimization problem.
+            Refer to the cvxpy documentation. The default is 'ECOS'.
+
+        abstol : float, optional
+            Absolute accuracy for the constrained solver used for CPOD. 
+            Default is 1e-3.
+            
+        verbose : bool, optional
+            If True, it prints the solver outputs. Default is False.
 
         Returns
         -------
         U : numpy array
-            The taylored basis, size (n,p).
+            The taylored basis, size (n,p) or (n,r).
         
         A : numpy array
-            The coefficient matrix, size (p,p).
+            The coefficient matrix, size (p,p) or or (p,r).
             
         exp_variance : numpy array
-            Array containing the explained variance of the modes, size (p,).
+            Array containing the explained variance of the modes, size (p,) or (r,).
 
         '''
         if decomp_type == 'POD':
@@ -170,11 +193,50 @@ class ROM():
             A = np.matmul(np.diag(S), Vt).T
             L = S**2    # Compute the eigenvalues
             exp_variance = 100*np.cumsum(L)/np.sum(L)
+            
+            return U, A, exp_variance
+        
+        elif decomp_type == 'CPOD':
+            # The constrained POD selects the POD scores by solving a constrained
+            # minimization problem where the function to minimize is the
+            # reconstruction error
+            
+            U, S, Vt = np.linalg.svd(X0, full_matrices=False)
+            A = np.matmul(np.diag(S), Vt).T
+            L = S**2    # Compute the eigenvalues
+            exp_variance = 100*np.cumsum(L)/np.sum(L)
+            Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
+            r = Ar.shape[1]
+            
+            std_array = np.zeros(X0.shape[0])
+            mean_array = np.zeros(X0.shape[0])
+            for f in range(self.n_features):
+                std_array[f*self.n_points:(f+1)*self.n_points] = self.std_vector[f]
+                mean_array[f*self.n_points:(f+1)*self.n_points] = self.mean_vector[f]
+            
+            Gr = np.zeros_like(Ar)
+            for i in range(Ar.shape[0]):
+                g = cp.Variable(r)
+                x0_tilde = Ur @ g
+                x_tilde = cp.multiply(std_array,  (Ur @ g)) + mean_array
+                
+                objective = cp.Minimize(cp.pnorm(x0_tilde - X0[:,i], p=2))
+                constrs = [x_tilde >= 0]
+                prob = cp.Problem(objective, constrs)
+                
+                if verbose == True:
+                    print(f'Calculating score {i+1}/{Ar.shape[0]}')
+                    
+                min_value = prob.solve(solver=solver, abstol=abstol, verbose=verbose)
+                Gr[i,:] = g.value
+
+            return Ur, Gr, exp_variance[:r]
+            
         else:
             raise NotImplementedError('The decomposition method selected has not been '\
                                       'implemented yet')
                 
-        return U, A, exp_variance
+        
 
     def reduction(self, U, A, exp_variance, select_modes, n_modes):
         '''
@@ -230,6 +292,64 @@ class ROM():
 
         return Ur, Ar
 
+    def adaptive_sampling(self, P, scale_type='standard'):
+        '''
+        
+
+        Parameters
+        ----------
+        P : numpy array
+            The array contains the set of parameters used to build the X matrix, size (p,d).
+        scale_type : str, optional
+            Type of scaling. The default is 'standard'.
+
+        Returns
+        -------
+        sample_new : numpy array
+            The new sample, size (d,).
+
+        '''
+        
+        X0 = self.scale_data(scale_type=scale_type)
+        U, S, Vt = np.linalg.svd(X0, full_matrices=False)
+        V = np.transpose(Vt)
+        p = V.shape[0]
+        
+        Inf_basis = np.zeros((p,))
+        Inf_relbasis = np.zeros((p,))
+        for k in range(p):
+            M = np.diag(S) @ (np.eye(p) - Vt[k,:] @ V[k,:])
+            Un, Sn, Vnt = np.linalg.svd(M, full_matrices=False)
+        
+            Inf_ui_mj = np.zeros((p,)) 
+            for i in range(p):        
+                Inf_ui_mj[i] = 1/np.abs(Un[i,i]) - 1 # Influence of snapshot j on mode i
+        
+            Inf_basis[k] = np.sum(S * Inf_ui_mj) # Influence of snapshots on the basis
+            
+        for k in range(p):
+            Inf_relbasis[k] = Inf_basis[k]/np.sum(Inf_basis) # Relative influence
+       
+        n_dim = P.shape[1]
+        # LHS sampling with n=100*n_dim
+        sampler = qmc.LatinHypercube(d=n_dim)
+        q = 100*n_dim
+        sample0 = sampler.random(n=q)
+        
+        sample = np.zeros_like(sample0)
+        for d in range(n_dim):
+            sample[:,d] = (P[:,d].max() - P[:,d].min()) * sample0[:,d] + P[:,d].min()
+        
+        Pot_basis = np.zeros((q,))
+        for i in range(q):
+            dist = np.linalg.norm(sample[i,:] - P, axis=1)
+            j = np.argmin(dist)
+            Pot_basis[i] = dist[j] * Inf_relbasis[j] # Potential of enrichment
+        
+        j_new = np.argmax(Pot_basis)
+        sample_new = sample[j_new, :]
+        return sample_new
+        
 
 class SPR(ROM):
     '''
@@ -431,18 +551,38 @@ class SPR(ROM):
 
 
 if __name__ == '__main__':
-    X = np.random.rand(15, 5)
-    spr = SPR(X, 5)
+    path = '../data/ROM/'
+    X = np.load(path + 'X_2D_train.npy')
+    P = np.genfromtxt(path + 'parameters_train.csv', delimiter=',', skip_header=1)
+    xz = np.load(path + 'xz.npy')
+    features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
+    n_features = len(features)
     
+    rom = ROM(X, n_features)
+    X0 = rom.scale_data()
+    U, A, exp_variance = rom.decomposition(X0, decomp_type='POD')
+    Ur, Ar = rom.reduction(U, A, exp_variance, select_modes='variance', n_modes=99.5)
+    
+    spr = SPR(X, n_features)
     C = spr.optimal_placement()
-    U, A, e = spr.decomposition(X, decomp_type='POD')
-    Ur, Ar = spr.reduction(U, A, e, select_modes='number', n_modes=3)
+    n_points = xz.shape[0]
+    n_sensors = C.shape[0]
     
-    y = np.array([[1.2,0],
-                  [1.1,0],
-                  [3.1, 0],
-                 [4.1, 1]])
+    x_test = X[:,0]
+    y = np.zeros((n_sensors,2))
+    y[:,0] = C @ x_test
+
+    for i in range(n_sensors):
+        y[i,1] = np.argmax(C[i,:]) // n_points
+
+    ap, x_rec_test = spr.fit_predict(C, y, n_modes=99.5)
     
-    ar, x_rec = spr.fit_predict(C, y)
-    ar, x_rec = spr.predict(y)
-    print(spr.k)
+    def NRMSE(prediction, observation):
+        RMSE = np.sqrt(np.sum((prediction-observation)**2))/observation.size
+        
+        return RMSE/np.average(observation)
+    
+    error = NRMSE(x_rec_test, x_test)
+    
+    print(f'The NRMSE is {error:.5f}')
+    
