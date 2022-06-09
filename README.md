@@ -14,10 +14,11 @@ The following packages will be installed:
 * Numpy >= 1.19
 * Scipy >= 1.5
 * Gpytorch >= 1.4.2
+* Cvxpy >= 1.1.3
 
 ## Techniques
 
-* Dimensinality reduction (POD)
+* Dimensionality reduction (POD and constrained POD)
 
 * Reduced Order Model via GPR
 
