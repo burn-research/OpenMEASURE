@@ -23,7 +23,7 @@ The following packages will be installed:
 * Reduced Order Model via GPR
 
 * Sparse sensing:
-    * Optimal sensor placement (QR decomposition)
+    * Optimal sensor placement (QR decomposition and Greedy Entropy Maximization)
     * Sparse placement for reconstruction
 
 ## Usage

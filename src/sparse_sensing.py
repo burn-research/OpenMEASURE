@@ -15,6 +15,7 @@ import scipy.linalg as la
 from scipy.stats import qmc
 import cvxpy as cp
 
+
 class ROM():
     '''
     Class containing utilities for Reduced-Order-Models building.
@@ -252,8 +253,10 @@ class ROM():
         
         exp_variance : numpy array
             The array containing the explained variance of the modes, size (p,).
+        
         select_modes : str
             Method of modes selection.
+        
         n_modes : int or float
             Parameter that controls the number of modes to be retained. If 
             select_modes = 'variance', n_modes can be a float between 0 and 100. 
@@ -300,6 +303,7 @@ class ROM():
         ----------
         P : numpy array
             The array contains the set of parameters used to build the X matrix, size (p,d).
+        
         scale_type : str, optional
             Type of scaling. The default is 'standard'.
 
@@ -372,6 +376,10 @@ class SPR(ROM):
     optimal_placement(scale_type='standard', select_modes='variance', n_modes=99)
         Calculates the C matrix using QRCP decomposition.
     
+    gem(Ur, n_sensors, verbose)
+        Selects the best sensors' placement based on a greedy entropy maximization
+        algorithm.
+    
     fit_predict(C, y, scale_type='standard', select_modes='variance', 
                 n_modes=99)
         Calculates the Theta matrix, then predicts ar and reconstructs x.
@@ -395,6 +403,7 @@ class SPR(ROM):
             Measurement vector to scale, size (s,2). The first column contains
             the measurements, the second column contains which feature is 
             measured.
+        
         scale_type : str
             Type of scaling.
 
@@ -415,21 +424,143 @@ class SPR(ROM):
         
         return y0
 
-    def optimal_placement(self, scale_type='standard', select_modes='variance', n_modes=99):
+    def gem(self, Ur, n_sensors, verbose):
+        '''
+        Selects the best sensors' placement based on a greedy entropy maximization
+        algorithm.
+
+        Parameters
+        ----------
+        Ur : numpy array
+            Truncated basis used as target for entropy selection, size (n,r).
+        
+        n_sensors : int
+            number of sensors.
+        
+        verbose : bool, optional
+            If True, it will output relevant information on the entropy selection
+            algorithm.
+
+        Returns
+        -------
+        optimal_sensors : numpy array
+            Array containing the index of the optimal sensors.
+
+        '''
+        
+        # The scaling is used to ensure that the determinant of the covariance
+        # matrix is greater than one.
+        sigma = np.var(Ur, ddof=1, axis=1)
+        coef = 1/np.sqrt(sigma.max())*2
+        Ur_scl = Ur*coef
+
+        sensor_list = []
+        
+        if verbose == True:
+            header = ['# sensors', 'Hx', 'Hy', 'Htot', 'MI', 'det']
+            print(f"{'-'*70} \n {header[0]:^10} {header[1]:^10} {header[2]:^10} {header[3]:^10} {header[4]:^10} {header[5]:^10} \n ")
+    
+        for s in range(n_sensors):
+            hi = np.zeros((Ur.shape[0], ))
+            for i, row in enumerate(Ur_scl):
+                s_data = np.concatenate((Ur_scl[sensor_list], row[np.newaxis, :]), 
+                                        axis=0)
+                sigma = np.cov(s_data, rowvar=True)
+                if s == 0:
+                    det_sigma = sigma
+                else:
+                    det_sigma = np.linalg.det(sigma)
+
+                if det_sigma <= 0:
+                    hi[i] = -1e3
+
+                else:
+                    hi[i] = (s+1)/2 * (1 + np.log(2*np.pi)) + 0.5*np.log(det_sigma)
+
+            sensor_list.append(np.argmax(hi))
+            
+            if verbose == True:
+                sensor_counter = len(sensor_list)
+                imax = np.argmax(hi)
+                
+                if sensor_counter == 1:
+                    hx = hi.max()
+                    print(f"{sensor_counter:^10} {hx:^10.2e} {'  -':^10} {'  -':^10} {'  -':^10} {'  -':^10}")
+                
+                elif len(sensor_list) == 2:
+                    s_var_x = np.var(Ur_scl[sensor_list[0], :], ddof=1)
+                    hx = 1/2 * (1 + np.log(2*np.pi)) + 0.5*np.log(s_var_x)
+                    
+                    s_var_y = np.var(Ur_scl[sensor_list[1], :], ddof=1)
+                    hy = 1/2 * (1 + np.log(2*np.pi)) + 0.5*np.log(s_var_y)
+                    
+                    s_cov = np.cov(Ur_scl[sensor_list, :], ddof=1)
+                    det_cov = np.linalg.det(s_cov)
+                    htot = (s+1)/2 * (1 + np.log(2*np.pi)) + \
+                        0.5*np.log(np.linalg.det(s_cov))
+    
+                    mi = 0.5 * np.log(s_var_x *
+                                      s_var_y/np.linalg.det(s_cov))
+                    
+                    print(f"{sensor_counter:^10} {hx:^10.2e} {hy:^10.2e} {htot:^10.2e} {mi:^10.2e} {det_cov:^10.2e} ")
+
+                elif len(sensor_list) > 2:
+                    
+                    s_var = np.var(Ur_scl[imax, :], ddof=1)
+                    hy = 1/2 * (1 + np.log(2*np.pi)) + 0.5*np.log(s_var)
+    
+                    s_covx = np.cov(Ur_scl[sensor_list[:-1], :], ddof=1)
+                    hx = (s)/2 * (1 + np.log(2*np.pi)) + \
+                        0.5*np.log(np.linalg.det(s_covx))
+    
+                    s_cov = np.cov(Ur_scl[sensor_list, :], ddof=1)
+                    det_cov = np.linalg.det(s_cov)
+                    htot = (s+1)/2 * (1 + np.log(2*np.pi)) + \
+                        0.5*np.log(np.linalg.det(s_cov))
+    
+                    mi = 0.5 * np.log(np.linalg.det(s_covx) *
+                                      s_var/np.linalg.det(s_cov))
+                    
+                    print(f"{sensor_counter:^10} {hx:^10.2e} {hy:^10.2e} {htot:^10.2e} {mi:^10.2e} {det_cov:^10.2e}")
+                    
+        optimal_sensors = np.array(sensor_list)
+        return optimal_sensors
+
+    def optimal_placement(self, calc_type='qr', n_sensors=10, mask=None, scale_type='standard', 
+                          select_modes='variance', n_modes=99, verbose=False):
         '''
         Return the matrix C containing the optimal placement of the sensors.
 
         Parameters
         ----------
+        calc_type : str, optional
+            Type of algorithm used to compute the C matrix. The available methods
+            are 'qr' and 'gem'. The default is 'qr'.
+        
+        n_sensors : int, optional
+            Number of sensors to calculate. Only used if the algorithm is 'gem'.
+            Default is 10.
+        
+        mask : numpy array, optional
+            A mask that indicates the region where to search for the optimal sensors.
+            Only used if the algorithm is 'gem'. Default is None, meaning that 
+            the entire volume is searched.
+        
         scale_type : str, optional
             Type of scaling. The default is 'standard'.
+        
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
             options are 'variance' or 'number'.
+        
         n_modes : int or float, optional
             Parameters that control the amount of modes retained. The default is 
             99, which represents 99% of the variance. If select_modes='number',
             n_modes represents the number of modes retained.
+        
+        verbose : bool, optional.
+            If True, it will output the results of the computation used for the
+            gem algorithm. Default is False.
 
         Returns
         -------
@@ -445,13 +576,27 @@ class SPR(ROM):
         Ur, Ar = SPR.reduction(self, U, A, exp_variance, select_modes, n_modes)
         r = Ur.shape[1]
 
-        # Calculate the QRCP
-        Q, R, P = la.qr(Ur.T, pivoting=True, mode='economic')
-        s = r
-        C = np.zeros((s, n))
-        for j in range(s):
-            C[j, P[j]] = 1
-
+        if calc_type == 'qr':
+            # Calculate the QRCP
+            Q, R, P = la.qr(Ur.T, pivoting=True, mode='economic')
+            s = r
+            C = np.zeros((s, n))
+            for j in range(s):
+                C[j, P[j]] = 1
+                
+        elif calc_type == 'gem':
+            if mask is not None:
+                Ur[~mask, :] = 1
+            
+            P = SPR.gem(self, Ur, n_sensors, verbose)
+            s = P.size
+            C = np.zeros((s, n))
+            for j in range(s):
+                C[j, P[j]] = 1
+        else:
+            raise NotImplementedError('The sensor selection method has not been '\
+                                      'implemented yet')
+        
         return C
 
     def fit_predict(self, C, y, scale_type='standard', select_modes='variance', 
@@ -464,15 +609,19 @@ class SPR(ROM):
         ----------
         C : numpy array
             The measurement matrix, size (s,n).
+        
         y : numpy array
             The measurement vector, size (s,2). The first column contains
             the measurements, the second column contains which feature is 
             measured.
+        
         scale_type : str, optional
             Type of scaling method. The default is 'standard'.
+        
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
             options are 'variance' or 'number'.
+        
         n_modes : int or float, optional
             Parameters that control the amount of modes retained. The default is 
             99, which represents 99% of the variance. If select_modes='number',
@@ -480,8 +629,10 @@ class SPR(ROM):
 
         Returns
         -------
+        
         ar : numpy array
             The low-dimensional projection of the state of the system, size (r,)
+        
         x_rec : numpy array
             The predicted state of the system, size (n,).
 
@@ -557,6 +708,7 @@ if __name__ == '__main__':
     xz = np.load(path + 'xz.npy')
     features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
     n_features = len(features)
+    n_points = xz.shape[0]
     
     rom = ROM(X, n_features)
     X0 = rom.scale_data()
@@ -564,15 +716,14 @@ if __name__ == '__main__':
     Ur, Ar = rom.reduction(U, A, exp_variance, select_modes='variance', n_modes=99.5)
     
     spr = SPR(X, n_features)
-    C = spr.optimal_placement()
-    n_points = xz.shape[0]
-    n_sensors = C.shape[0]
-    
+    C = spr.optimal_placement(n_modes=99.5)
+
     x_test = X[:,0]
-    y = np.zeros((n_sensors,2))
+    
+    y = np.zeros((C.shape[0],2))
     y[:,0] = C @ x_test
 
-    for i in range(n_sensors):
+    for i in range(C.shape[0]):
         y[i,1] = np.argmax(C[i,:]) // n_points
 
     ap, x_rec_test = spr.fit_predict(C, y, n_modes=99.5)
@@ -583,6 +734,5 @@ if __name__ == '__main__':
         return RMSE/np.average(observation)
     
     error = NRMSE(x_rec_test, x_test)
-    
     print(f'The NRMSE is {error:.5f}')
     
