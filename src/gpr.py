@@ -62,9 +62,8 @@ class BatchIndipendentMultitaskGPModel(gpytorch.models.ExactGP):
             self.covar_module = ScaleKernel(MaternKernel(nu=2.5, batch_shape=shape), 
                                       batch_shape=shape)
         else:
-            self.covar_module = kernel
-        
-
+            self.covar_module = ScaleKernel(kernel, batch_shape=shape)
+            
     def forward(self, x):
         mean_x = self.mean_module(x)
         kernel_x = self.covar_module(x)
@@ -150,8 +149,8 @@ class GPR(sps.ROM):
 
 
     def fit_predict(self, xs, scale_type='standard', select_modes='variance', 
-                    n_modes=99, max_iter=1000, rel_error=1e-5, verbose=False, 
-                    save_path=None):
+                    n_modes=99, mean=None, kernel=None, max_iter=1000, 
+                    rel_error=1e-5, verbose=False, save_path=None):
         '''
         Fit the GPR model.
         Return the prediction vector.
@@ -210,7 +209,8 @@ class GPR(sps.ROM):
         A0_torch = torch.from_numpy(D0[:, self.d:]).contiguous().float() 
         
         likelihood = MultitaskGaussianLikelihood(num_tasks=self.r)
-        model = BatchIndipendentMultitaskGPModel(P0_torch, A0_torch, likelihood)
+        model = BatchIndipendentMultitaskGPModel(P0_torch, A0_torch, likelihood,
+                                                 mean=mean, kernel=kernel)
         
         # Find optimal model hyperparameters
         model.train()
@@ -233,9 +233,8 @@ class GPR(sps.ROM):
             e = torch.abs(loss - loss_old).item()
             loss_old = loss
             if verbose == True:
-                print('Iter %d/%d - Loss: %.3f - Noise: %.3f - Lengthscale: %.3f'
-                      % (i + 1, max_iter, loss.item(), model.likelihood.noise.item(),
-                         model.covar_module.base_kernel.lengthscale[0]))
+                print('Iter %d/%d - Loss: %.3f - Noise: %.3f'
+                      % (i + 1, max_iter, loss.item(), model.likelihood.noise.item()))
 
             optimizer.step()
             i += 1
@@ -340,3 +339,4 @@ if __name__ == '__main__':
     P_test = P[0:3,:] + 1
     Ap, Sigma = gpr.fit_predict(P_test)
     X_rec = gpr.reconstruct(Ap)
+

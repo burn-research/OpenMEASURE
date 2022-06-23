@@ -13,7 +13,7 @@ pip install openmeasure
 The following packages will be installed:
 * Numpy >= 1.19
 * Scipy >= 1.5
-* Gpytorch >= 1.4.2
+* Gpytorch >= 1.5.1
 * Cvxpy >= 1.1.3
 
 ## Techniques
