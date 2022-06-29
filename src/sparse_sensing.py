@@ -600,7 +600,8 @@ class SPR(ROM):
         return C
 
     def fit_predict(self, C, y, scale_type='standard', select_modes='variance', 
-                    n_modes=99):
+                    n_modes=99, method='OLS', solver='ECOS', abstol=1e-3, 
+                    verbose=False):
         '''
         Fit the taylored basis and the measurement matrix.
         Return the prediction vector.
@@ -616,7 +617,8 @@ class SPR(ROM):
             measured.
         
         scale_type : str, optional
-            Type of scaling method. The default is 'standard'.
+            Type of scaling method. The default is 'standard'. Standard scaling is the 
+            only scaling implemented for the 'COLS' method.
         
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
@@ -626,6 +628,20 @@ class SPR(ROM):
             Parameters that control the amount of modes retained. The default is 
             99, which represents 99% of the variance. If select_modes='number',
             n_modes represents the number of modes retained.
+
+        method : str, optional
+            Method used to comupte the solution of the y0 = Theta * a linear 
+            system. The choice are 'OLS' or 'COLS' which is constrained OLS. The
+            default is 'OLS'.
+        solver : str, optional
+            Solver used for the constrained optimization problem. Only used if 
+            the method selected is 'COLS'. The default is 'ECOS'.
+        abstol : float, optional
+            The absolute tolerance used to terminate the constrained optimization
+            problem. The default is 1e-3.
+        verbose : bool, optional
+            If True, it displays the output from the constrained optimiziation 
+            solver. The default is False
 
         Returns
         -------
@@ -655,6 +671,10 @@ class SPR(ROM):
         
         Theta = C @ Ur
         self.Theta = Theta
+        self.method = method
+        self.solver = solver
+        self.abstol = abstol
+        self.verbose = verbose
         
         # calculate the condition number
         if Theta.shape[0] == Theta.shape[1]:
@@ -690,8 +710,37 @@ class SPR(ROM):
         '''
         if hasattr(self, 'Theta'):
             y0 = SPR.scale_vector(self, y, self.scale_type)
-            ar, res, rank, s = la.lstsq(self.Theta, y0)
-            x0_rec = self.Ur @ ar
+            
+            if self.method == 'OLS':
+                
+                ar, res, rank, s = la.lstsq(self.Theta, y0)
+                x0_rec = self.Ur @ ar
+                
+            elif self.method == 'COLS':
+                r = self.Theta.shape[1]
+                g = cp.Variable(r)
+                
+                y0_tilde = self.Theta @ g
+                
+                std_vector_arr = np.zeros_like(y0)
+                mean_vector_arr = np.zeros_like(y0)
+                for i in range(y0.shape[0]):
+                    std_vector_arr = self.std_vector[int(y[i,1])]
+                    mean_vector_arr[i] = self.mean_vector[int(y[i,1])]
+                
+                y_tilde = cp.multiply(std_vector_arr, y0_tilde) + mean_vector_arr
+                objective = cp.Minimize(cp.pnorm(y0 - self.Theta @ g, p=2))
+                constrs = [y_tilde >= 0]
+                prob = cp.Problem(objective, constrs)
+                min_value = prob.solve(solver=self.solver, abstol=self.abstol, 
+                                        verbose=self.verbose)
+                ar = g.value
+                x0_rec = self.Ur @ ar
+            
+            else:
+                raise NotImplementedError('The prediction method selected has not been '\
+                                          'implemented yet')
+            
         
             x_rec = SPR.unscale_data(self, x0_rec, self.scale_type)
         else:

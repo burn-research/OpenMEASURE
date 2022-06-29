@@ -24,7 +24,7 @@ The following packages will be installed:
 
 * Sparse sensing:
     * Optimal sensor placement (QR decomposition and Greedy Entropy Maximization)
-    * Sparse placement for reconstruction
+    * Sparse placement for reconstruction (OLS and COLS methods)
 
 ## Usage
 
