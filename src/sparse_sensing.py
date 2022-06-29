@@ -720,17 +720,17 @@ class SPR(ROM):
                 r = self.Theta.shape[1]
                 g = cp.Variable(r)
                 
-                y0_tilde = self.Theta @ g
+                std_array = np.zeros(self.Ur.shape[0])
+                mean_array = np.zeros(self.Ur.shape[0])
+                for f in range(self.n_features):
+                    std_array[f*self.n_points:(f+1)*self.n_points] = self.std_vector[f]
+                    mean_array[f*self.n_points:(f+1)*self.n_points] = self.mean_vector[f]
                 
-                std_vector_arr = np.zeros_like(y0)
-                mean_vector_arr = np.zeros_like(y0)
-                for i in range(y0.shape[0]):
-                    std_vector_arr = self.std_vector[int(y[i,1])]
-                    mean_vector_arr[i] = self.mean_vector[int(y[i,1])]
+                g = cp.Variable(r)
+                x_tilde = cp.multiply(std_array,  (self.Ur @ g)) + mean_array
                 
-                y_tilde = cp.multiply(std_vector_arr, y0_tilde) + mean_vector_arr
                 objective = cp.Minimize(cp.pnorm(y0 - self.Theta @ g, p=2))
-                constrs = [y_tilde >= 0]
+                constrs = [x_tilde >= 0]
                 prob = cp.Problem(objective, constrs)
                 min_value = prob.solve(solver=self.solver, abstol=self.abstol, 
                                         verbose=self.verbose)
@@ -775,7 +775,7 @@ if __name__ == '__main__':
     for i in range(C.shape[0]):
         y[i,1] = np.argmax(C[i,:]) // n_points
 
-    ap, x_rec_test = spr.fit_predict(C, y, n_modes=99.5)
+    ap, x_rec_test = spr.fit_predict(C, y, n_modes=99.5, method='COLS', verbose=True)
     
     def NRMSE(prediction, observation):
         RMSE = np.sqrt(np.sum((prediction-observation)**2))/observation.size
@@ -784,4 +784,4 @@ if __name__ == '__main__':
     
     error = NRMSE(x_rec_test, x_test)
     print(f'The NRMSE is {error:.5f}')
-    
+
