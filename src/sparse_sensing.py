@@ -874,31 +874,31 @@ if __name__ == '__main__':
     n_points = xz.shape[0]
     mesh_outline = np.genfromtxt(path + 'mesh_outline.csv', delimiter=',', skip_header=1)
     
-    # rom = ROM(X, n_features, xyz)
-    # X0 = rom.scale_data()
-    # U, A, exp_variance = rom.decomposition(X0, decomp_type='POD')
-    # Ur, Ar = rom.reduction(U, A, exp_variance, select_modes='variance', n_modes=99.5)
+    rom = ROM(X, n_features, xyz)
+    X0 = rom.scale_data()
+    U, A, exp_variance = rom.decomposition(X0, decomp_type='POD')
+    Ur, Ar = rom.reduction(U, A, exp_variance, select_modes='variance', n_modes=99.5)
     
     spr = SPR(X, n_features, xyz)
-    # C = spr.optimal_placement(n_modes=99.5)
+    C = spr.optimal_placement(n_modes=99.5)
 
-    # x_test = X[:,0]
+    x_test = X[:,0]
     
-    # y = np.zeros((C.shape[0],2))
-    # y[:,0] = C @ x_test
+    y = np.zeros((C.shape[0],2))
+    y[:,0] = C @ x_test
 
-    # for i in range(C.shape[0]):
-    #     y[i,1] = np.argmax(C[i,:]) // n_points
+    for i in range(C.shape[0]):
+        y[i,1] = np.argmax(C[i,:]) // n_points
 
-    # ap, x_rec_test = spr.fit_predict(C, y, n_modes=99.5, method='COLS', verbose=True)
+    ap, x_rec_test = spr.fit_predict(C, y, n_modes=99.5, method='COLS', verbose=True)
     
-    # def NRMSE(prediction, observation):
-    #     RMSE = np.sqrt(np.sum((prediction-observation)**2))/observation.size
+    def NRMSE(prediction, observation):
+        RMSE = np.sqrt(np.sum((prediction-observation)**2))/observation.size
         
-    #     return RMSE/np.average(observation)
+        return RMSE/np.average(observation)
     
-    # error = NRMSE(x_rec_test, x_test)
-    # print(f'The NRMSE is {error:.5f}')
+    error = NRMSE(x_rec_test, x_test)
+    print(f'The NRMSE is {error:.5f}')
 
     mask_pos = xz[:,0] < 0.1
     mask = np.ones((X.shape[0],), dtype=bool)
