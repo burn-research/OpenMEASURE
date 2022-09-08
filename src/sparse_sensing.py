@@ -29,6 +29,9 @@ class ROM():
     n_features : int
         the number of features in the dataset (temperature, velocity, etc.).
         
+    xyz : numpy array
+        3D position of the data in X, size (nx3).
+        
     Methods
     ----------
     scale_data(scale_type='standard')
@@ -45,15 +48,19 @@ class ROM():
     
     '''
 
-    def __init__(self, X, n_features):
+    def __init__(self, X, n_features, xyz):
         '''    
         Parameters
         ----------
         X : numpy array
             Data matrix of dimensions (nxm) where n = n_features * n_points and m
             is the number of operating conditions.
+        
         n_features : int
             The number of features in the dataset (temperature, velocity, etc.).
+
+        xyz : numpy array
+            3D position of the data in X, size (nx3).
 
         Returns
         -------
@@ -67,6 +74,8 @@ class ROM():
         else:
            self.X = X
            self.n_features = n_features
+           self.xyz = xyz
+           
 
     def scale_data(self, scale_type='standard'):
         '''
@@ -368,6 +377,9 @@ class SPR(ROM):
     n_features : int
         the number of features in the dataset (temperature, velocity, etc.).
         
+    xyz : numpy array
+        3D position of the data in X, size (nx3).
+        
     Methods
     ----------
     scale_vector(y, scale_type='standard')
@@ -389,8 +401,8 @@ class SPR(ROM):
     
     '''
 
-    def __init__(self, X, n_features):
-        super().__init__(X, n_features)
+    def __init__(self, X, n_features, xyz):
+        super().__init__(X, n_features, xyz)
 
 
     def scale_vector(self, y, scale_type):
@@ -424,7 +436,7 @@ class SPR(ROM):
         
         return y0
 
-    def gem(self, Ur, n_sensors, verbose):
+    def gem(self, Ur, n_sensors, mask, d_min, verbose):
         '''
         Selects the best sensors' placement based on a greedy entropy maximization
         algorithm.
@@ -437,7 +449,13 @@ class SPR(ROM):
         n_sensors : int
             number of sensors.
         
-        verbose : bool, optional
+        mask : numpy array
+            A mask that indicates the region where to search for the optimal sensors.
+        
+        d_min : float
+            Minimum distance between sensors. Only used if 'gem' method is selected.
+        
+        verbose : bool
             If True, it will output relevant information on the entropy selection
             algorithm.
 
@@ -447,87 +465,94 @@ class SPR(ROM):
             Array containing the index of the optimal sensors.
 
         '''
+        if mask is None:
+            mask = np.ones((Ur.shape[0],), dtype=bool)
         
+        index_org = np.arange(0,Ur.shape[0]) # original index before masking
+
         # The scaling is used to ensure that the determinant of the covariance
         # matrix is greater than one.
-        sigma = np.var(Ur, ddof=1, axis=1)
+        sigma = np.var(Ur[mask], ddof=1, axis=1)
         coef = 1/np.sqrt(sigma.max())*2
+        Ur_msk = Ur[mask]*coef
         Ur_scl = Ur*coef
 
-        sensor_list = []
+        xyz_msk = np.tile(self.xyz, (self.n_features,1))[mask]
+        index_msk = index_org[mask]
+
+        sensor_list_glb = []
+        sensor_list_loc = []
         
         if verbose == True:
-            header = ['# sensors', 'Hx', 'Hy', 'Htot', 'MI', 'det']
-            print(f"{'-'*70} \n {header[0]:^10} {header[1]:^10} {header[2]:^10} {header[3]:^10} {header[4]:^10} {header[5]:^10} \n ")
-    
+            header = ['# sensors', 'sigma^2 y', 'sigma^2 y|a', 'Htot']
+            print(f"{'-'*70} \n {header[0]:^10} {header[1]:^10} {header[2]:^10} {header[3]:^10} \n ")
+        
+        H_tot = 0
+        sigma_coef = np.var(Ur_msk, ddof=1, axis=1)
         for s in range(n_sensors):
-            hi = np.zeros((Ur.shape[0], ))
-            for i, row in enumerate(Ur_scl):
-                s_data = np.concatenate((Ur_scl[sensor_list], row[np.newaxis, :]), 
-                                        axis=0)
-                sigma = np.cov(s_data, rowvar=True)
-                if s == 0:
-                    det_sigma = sigma
-                else:
-                    det_sigma = np.linalg.det(sigma)
-
-                if det_sigma <= 0:
-                    hi[i] = -1e3
-
-                else:
-                    hi[i] = (s+1)/2 * (1 + np.log(2*np.pi)) + 0.5*np.log(det_sigma)
-
-            sensor_list.append(np.argmax(hi))
+            if s == 0:
+                # the first sensor is the one with maximum variance
+                i_sensor = np.argmax(sigma_coef)
+                sensor_list_loc.append(i_sensor)
+                sensor_list_glb.append(index_msk[i_sensor])
+                
+                p_sensor = xyz_msk[i_sensor,:]
+                d_sensor = np.linalg.norm(p_sensor-xyz_msk, axis=1)
+                # ensure no sensor placed close to the others
+                mask_d = d_sensor >= d_min
             
-            if verbose == True:
-                sensor_counter = len(sensor_list)
-                imax = np.argmax(hi)
+                if verbose == True:
+                    print(f"{s+1:^10} {sigma_coef[sensor_list_glb[s]]:^10.2e} {'  -':^10} {'  -':^10}")
+            
+            else:
+                Ur_msk = Ur_msk[mask_d]
+                xyz_msk = xyz_msk[mask_d]
+                index_msk = index_msk[mask_d]
                 
-                if sensor_counter == 1:
-                    hx = hi.max()
-                    print(f"{sensor_counter:^10} {hx:^10.2e} {'  -':^10} {'  -':^10} {'  -':^10} {'  -':^10}")
+                temp = np.zeros((index_msk.shape[0]))
+                Sigma_aa = np.cov(Ur_scl[sensor_list_glb, :], ddof=1)
                 
-                elif len(sensor_list) == 2:
-                    s_var_x = np.var(Ur_scl[sensor_list[0], :], ddof=1)
-                    hx = 1/2 * (1 + np.log(2*np.pi)) + 0.5*np.log(s_var_x)
+                if s == 1:
+                    Sigma_aa_inv = 1/Sigma_aa
+                else:
+                    # the noise is added to ensure the singularity of the 
+                    # covariance matrix
+                    noise = 1e-5
+                    Sigma_aa_inv = np.linalg.inv(Sigma_aa + noise*np.eye(s))
+                
+                for j in range(index_msk.size):
+                    Sigma = np.cov(Ur_scl[sensor_list_glb, :], Ur_msk[j, :], ddof=1)
+                    Sigma_ya = Sigma[-1, :-1]
+                    Sigma_ay = Sigma[:-1, -1]
+                    sigma2y = Sigma[-1,-1]
                     
-                    s_var_y = np.var(Ur_scl[sensor_list[1], :], ddof=1)
-                    hy = 1/2 * (1 + np.log(2*np.pi)) + 0.5*np.log(s_var_y)
-                    
-                    s_cov = np.cov(Ur_scl[sensor_list, :], ddof=1)
-                    det_cov = np.linalg.det(s_cov)
-                    htot = (s+1)/2 * (1 + np.log(2*np.pi)) + \
-                        0.5*np.log(np.linalg.det(s_cov))
-    
-                    mi = 0.5 * np.log(s_var_x *
-                                      s_var_y/np.linalg.det(s_cov))
-                    
-                    print(f"{sensor_counter:^10} {hx:^10.2e} {hy:^10.2e} {htot:^10.2e} {mi:^10.2e} {det_cov:^10.2e} ")
-
-                elif len(sensor_list) > 2:
-                    
-                    s_var = np.var(Ur_scl[imax, :], ddof=1)
-                    hy = 1/2 * (1 + np.log(2*np.pi)) + 0.5*np.log(s_var)
-    
-                    s_covx = np.cov(Ur_scl[sensor_list[:-1], :], ddof=1)
-                    hx = (s)/2 * (1 + np.log(2*np.pi)) + \
-                        0.5*np.log(np.linalg.det(s_covx))
-    
-                    s_cov = np.cov(Ur_scl[sensor_list, :], ddof=1)
-                    det_cov = np.linalg.det(s_cov)
-                    htot = (s+1)/2 * (1 + np.log(2*np.pi)) + \
-                        0.5*np.log(np.linalg.det(s_cov))
-    
-                    mi = 0.5 * np.log(np.linalg.det(s_covx) *
-                                      s_var/np.linalg.det(s_cov))
-                    
-                    print(f"{sensor_counter:^10} {hx:^10.2e} {hy:^10.2e} {htot:^10.2e} {mi:^10.2e} {det_cov:^10.2e}")
-                    
-        optimal_sensors = np.array(sensor_list)
+                    # conditional variance
+                    sigma2y_cond = sigma2y - np.dot(np.dot(Sigma_ya,Sigma_aa_inv),Sigma_ay)
+                    temp[j] = sigma2y_cond
+            
+                # the sensor with the highest conditional variance is selected
+                i_sensor = np.argmax(temp)
+                sensor_list_loc.append(i_sensor)
+                sensor_list_glb.append(index_msk[i_sensor])
+                
+                p_sensor = xyz_msk[i_sensor,:]
+                d_sensor = np.linalg.norm(p_sensor-xyz_msk, axis=1)
+                
+                mask_d = d_sensor >= d_min
+                
+                # calculate the total conditional entropy
+                H_tot += 0.5*np.log(temp[i_sensor]) + 0.5*(np.log(2*np.pi) + 1)
+                
+                if verbose == True:
+                    print(f"{s+1:^10} {sigma_coef[sensor_list_glb[s]]:^10.2e} {temp[i_sensor]:^10.2e} {H_tot:^10.2e}")
+            
+            
+        optimal_sensors = np.array(sensor_list_glb)
         return optimal_sensors
 
-    def optimal_placement(self, calc_type='qr', n_sensors=10, mask=None, scale_type='standard', 
-                          select_modes='variance', n_modes=99, verbose=False):
+    def optimal_placement(self, calc_type='qr', n_sensors=10, mask=None, d_min=0., 
+                          scale_type='standard', select_modes='variance', n_modes=99, 
+                          verbose=False):
         '''
         Return the matrix C containing the optimal placement of the sensors.
 
@@ -543,8 +568,11 @@ class SPR(ROM):
         
         mask : numpy array, optional
             A mask that indicates the region where to search for the optimal sensors.
-            Only used if the algorithm is 'gem'. Default is None, meaning that 
-            the entire volume is searched.
+            Default is None, meaning that the entire volume is searched.
+        
+        d_min : float, optional
+            Minimum distance between sensors. Only used if 'gem' method is selected.
+            Default is 0.0.
         
         scale_type : str, optional
             Type of scaling. The default is 'standard'.
@@ -577,7 +605,9 @@ class SPR(ROM):
         r = Ur.shape[1]
 
         if calc_type == 'qr':
-            # Calculate the QRCP
+            # Calculate the QRCP placement
+            if mask is not None:
+                Ur[~mask, :] = 0
             Q, R, P = la.qr(Ur.T, pivoting=True, mode='economic')
             s = r
             C = np.zeros((s, n))
@@ -585,10 +615,8 @@ class SPR(ROM):
                 C[j, P[j]] = 1
                 
         elif calc_type == 'gem':
-            if mask is not None:
-                Ur[~mask, :] = 1
-            
-            P = SPR.gem(self, Ur, n_sensors, verbose)
+            # Calculate the GEM placement
+            P = SPR.gem(self, Ur, n_sensors, mask, d_min, verbose)
             s = P.size
             C = np.zeros((s, n))
             for j in range(s):
@@ -751,37 +779,196 @@ class SPR(ROM):
 
 
 if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+    import matplotlib.tri as tri
+#---------------------------------Plotting utilities--------------------------------------------------
+    def sample_cmap(x):
+        return plt.cm.jet((np.clip(x,0,1)))
+
+    def plot_sensors(xz_sensors, features, mesh_outline):
+        fig, ax = plt.subplots(figsize=(4, 4))
+        ax.plot(mesh_outline[:,0], mesh_outline[:,1], c='k', lw=0.5, zorder=1)
+        
+        features_unique = np.unique(xz_sensors[:,2])
+        colors = np.zeros((features_unique.size,4))
+        for i in range(colors.shape[0]):
+            colors[i,:] = sample_cmap(features_unique[i]/len(features))
+            
+        for i, f in enumerate(features_unique):
+            mask = xz_sensors[:,2] == f
+            ax.scatter(xz_sensors[:,0][mask], xz_sensors[:,1][mask], color=colors[i,:], 
+                       marker='x', s=15, lw=0.5, label=features[int(f)], zorder=2)
+
+        
+        ax.set_xlabel('$x (\mathrm{m})$', fontsize=8)
+        ax.set_ylabel('$z (\mathrm{m})$', fontsize=8)
+        eps = 1e-2
+        ax.set_xlim(-eps, 0.35)
+        ax.set_ylim(-0.15,0.7+eps)
+        ax.set_aspect('equal')
+        ax.legend(fontsize=8, frameon=False, loc='center right')
+        ax.xaxis.tick_top()
+        ax.xaxis.set_label_position('top')
+        wid = 0.3
+        ax.xaxis.set_tick_params(width=wid)
+        ax.yaxis.set_tick_params(width=wid)
+        ax.set_xticks([0., 0.18, 0.35])
+        ax.tick_params(axis='both', which='major', labelsize=8)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        
+        plt.show()
+
+    def plot_contours_tri(x, y, zs, cbar_label=''):
+        triang = tri.Triangulation(x, y)
+        triang_mirror = tri.Triangulation(-x, y)
+
+        fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(6,6))
+        
+        z_min = np.min(zs)
+        z_max = np.max(zs)
+       
+        n_levels = 12
+        levels = np.linspace(z_min, z_max, n_levels)
+        cmap_name= 'inferno'
+        titles=['Original CFD','Predicted']
+        
+        for i, ax in enumerate(axs):
+            if i == 0:
+                ax.tricontourf(triang_mirror, zs[i], levels, vmin=z_min, vmax=z_max, cmap=cmap_name)
+            else:
+                ax.tricontourf(triang, zs[i], levels, vmin=z_min, vmax=z_max, cmap=cmap_name)
+                ax.tick_params(axis='y', which='both', left=False, right=False, labelleft=False) 
+            
+            ax.set_aspect('equal')
+            ax.set_title(titles[i])
+            ax.set_xlabel('$x (\mathrm{m})$')
+            if i == 0:
+                ax.set_ylabel('$z (\mathrm{m})$')
+        
+        fig.subplots_adjust(bottom=0., top=1., left=0., right=0.85, wspace=0.02, hspace=0.02)
+        start = axs[1].get_position().bounds[1]
+        height = axs[1].get_position().bounds[3]
+        
+        cb_ax = fig.add_axes([0.9, start, 0.05, height])
+        cmap = mpl.cm.get_cmap(cmap_name, n_levels)
+        norm = mpl.colors.Normalize(vmin=z_min, vmax=z_max)
+        
+        fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cb_ax, 
+                    orientation='vertical', label=cbar_label)
+        
+        plt.show()
+    
     path = '../data/ROM/'
     X = np.load(path + 'X_2D_train.npy')
+    X_test = np.load(path + 'X_2D_test.npy')
     P = np.genfromtxt(path + 'parameters_train.csv', delimiter=',', skip_header=1)
     xz = np.load(path + 'xz.npy')
+    xyz = np.zeros((xz.shape[0], 3))
+    xyz[:,0] = xz[:,0]
+    xyz[:,2] = xz[:,1]
     features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
     n_features = len(features)
     n_points = xz.shape[0]
+    mesh_outline = np.genfromtxt(path + 'mesh_outline.csv', delimiter=',', skip_header=1)
     
-    rom = ROM(X, n_features)
-    X0 = rom.scale_data()
-    U, A, exp_variance = rom.decomposition(X0, decomp_type='POD')
-    Ur, Ar = rom.reduction(U, A, exp_variance, select_modes='variance', n_modes=99.5)
+    # rom = ROM(X, n_features, xyz)
+    # X0 = rom.scale_data()
+    # U, A, exp_variance = rom.decomposition(X0, decomp_type='POD')
+    # Ur, Ar = rom.reduction(U, A, exp_variance, select_modes='variance', n_modes=99.5)
     
-    spr = SPR(X, n_features)
-    C = spr.optimal_placement(n_modes=99.5)
+    spr = SPR(X, n_features, xyz)
+    # C = spr.optimal_placement(n_modes=99.5)
 
-    x_test = X[:,0]
+    # x_test = X[:,0]
     
-    y = np.zeros((C.shape[0],2))
-    y[:,0] = C @ x_test
+    # y = np.zeros((C.shape[0],2))
+    # y[:,0] = C @ x_test
 
-    for i in range(C.shape[0]):
-        y[i,1] = np.argmax(C[i,:]) // n_points
+    # for i in range(C.shape[0]):
+    #     y[i,1] = np.argmax(C[i,:]) // n_points
 
-    ap, x_rec_test = spr.fit_predict(C, y, n_modes=99.5, method='COLS', verbose=True)
+    # ap, x_rec_test = spr.fit_predict(C, y, n_modes=99.5, method='COLS', verbose=True)
     
-    def NRMSE(prediction, observation):
-        RMSE = np.sqrt(np.sum((prediction-observation)**2))/observation.size
+    # def NRMSE(prediction, observation):
+    #     RMSE = np.sqrt(np.sum((prediction-observation)**2))/observation.size
         
-        return RMSE/np.average(observation)
+    #     return RMSE/np.average(observation)
     
-    error = NRMSE(x_rec_test, x_test)
-    print(f'The NRMSE is {error:.5f}')
+    # error = NRMSE(x_rec_test, x_test)
+    # print(f'The NRMSE is {error:.5f}')
 
+    mask_pos = xz[:,0] < 0.1
+    mask = np.ones((X.shape[0],), dtype=bool)
+    keep = ['T', 'CO2']
+
+    for f in features:
+        ind = features.index(f)
+        mask[ind*n_points:(ind+1)*n_points][mask_pos] = False
+
+        if f not in keep:
+            mask[ind*n_points:(ind+1)*n_points] = False
+
+    for i in range(n_points):
+        if np.any(X[i,:] > 1500):
+            mask[i] = False
+
+    C_qr = spr.optimal_placement(n_modes=99.5, mask=mask)
+        
+    # Get the sensors positions and features
+    n_sensors = C_qr.shape[0]
+    xz_sensors = np.zeros((n_sensors, 4))
+    for i in range(n_sensors):
+        index = np.argmax(C_qr[i,:])
+        xz_sensors[i,:2] = xz[index % n_points, :]
+        xz_sensors[i,2] = index // n_points
+
+    plot_sensors(xz_sensors, features, mesh_outline)
+
+    # Sample a test simulation using the optimal qr matrix
+    y_qr = np.zeros((n_sensors,2))
+    y_qr[:,0] = C_qr @ X_test[:,0]
+
+    for i in range(n_sensors):
+        y_qr[i,1] = np.argmax(C_qr[i,:]) // n_points
+
+    # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
+    ap, xp = spr.fit_predict(C_qr, y_qr)
+
+    # Select the feature to plot
+    str_ind = 'OH'
+    ind = features.index(str_ind)
+
+    plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_points:(ind+1)*n_points, 0], 
+                    xp[ind*n_points:(ind+1)*n_points]], cbar_label=str_ind)
+
+    C_gem = spr.optimal_placement(calc_type='gem', n_sensors=20, mask=None, d_min=0., 
+                          scale_type='standard', select_modes='variance', n_modes=99.5, 
+                          verbose=True)
+    
+    n_sensors = C_gem.shape[0]
+    xz_sensors = np.zeros((n_sensors, 4))
+    for i in range(n_sensors):
+        index = np.argmax(C_gem[i,:])
+        xz_sensors[i,:2] = xz[index % n_points, :]
+        xz_sensors[i,2] = index // n_points
+
+    plot_sensors(xz_sensors, features, mesh_outline)
+
+    y_gem = np.zeros((n_sensors,2))
+    y_gem[:,0] = C_gem @ X_test[:,0]
+
+    for i in range(n_sensors):
+        y_gem[i,1] = np.argmax(C_gem[i,:]) // n_points
+
+    # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
+    ap, xp = spr.fit_predict(C_gem, y_gem)
+
+    # Select the feature to plot
+    str_ind = 'OH'
+    ind = features.index(str_ind)
+
+    plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_points:(ind+1)*n_points, 0], 
+                    xp[ind*n_points:(ind+1)*n_points]], cbar_label=str_ind)
