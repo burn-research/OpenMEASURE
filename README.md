@@ -53,6 +53,11 @@ n_features = len(features)
 xz = np.load(path + 'xz.npy')
 n_cells = xz.shape[0]
 
+# Create the x,y,z array
+xyz = np.zeros((n_cells, 3))
+xyz[:,0] = xz[:,0]
+xyz[:,2] = xz[:,1]
+
 # This reads the files containing the parameters (D, H2, phi) with which 
 # the simulation were computed
 P_train = np.genfromtxt(path + 'parameters_train.csv', delimiter=',', skip_header=1)
@@ -143,7 +148,7 @@ def plot_contours_tri(x, y, zs, cbar_label=''):
 
 #---------------------------------Sparse sensing--------------------------------------------------
 
-spr = SPR(X_train, n_features) # Create the spr object
+spr = SPR(X_train, n_features, xyz) # Create the spr object
 
 # Compute the optimal measurement matrix using qr decomposition
 n_sensors = 14
@@ -177,7 +182,7 @@ plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_cells:(ind+1)*n_cells, 3],
 
 #------------------------------------GPR ROM--------------------------------------------------
 # Create the gpr object
-gpr = GPR(X_train, P_train, n_features)
+gpr = GPR(X_train, n_features, xyz, P_train)
 
 # Calculates the POD coefficients ap and the uncertainty for the test simulations
 Ap, Sigmap = gpr.fit_predict(P_test, verbose=True)
@@ -192,7 +197,7 @@ ind = features.index(str_ind)
 x_test = X_test[ind*n_cells:(ind+1)*n_cells,3]
 xp_test = Xp[ind*n_cells:(ind+1)*n_cells, 3]
 
-plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label='str_ind')
+plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
 
 ```
 

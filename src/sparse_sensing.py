@@ -12,7 +12,7 @@ MODULE: sparse_sensing.py
 
 import numpy as np
 import scipy.linalg as la
-from scipy.stats import qmc
+from scipy.stats import qmc, kurtosis
 import cvxpy as cp
 
 
@@ -34,10 +34,10 @@ class ROM():
         
     Methods
     ----------
-    scale_data(scale_type='standard')
+    scale_data(scale_type='std')
         Scale the data.
     
-    unscale_data(x0, scale_type)
+    unscale_data(x0)
         Unscale the data.
     
     decomposition(X0, decomp_type='POD')
@@ -77,7 +77,7 @@ class ROM():
            self.xyz = xyz
            
 
-    def scale_data(self, scale_type='standard'):
+    def scale_data(self, scale_type='std'):
         '''
         Return the scaled data matrix. The default is to scale the data to 
         unitary variance.
@@ -85,8 +85,9 @@ class ROM():
         Parameters
         ----------
         scale_type : str, optional
-            Type of scaling. The default is 'standard'. For now, it is the only
-            method implemented.
+            Type of scaling. The default is 'std'. The list of scaling methods includes
+            ['std', 'none', 'pareto', 'vast', 'range', 'level', 'max', 'variance',
+             'median', 'poisson', 'vast_2', 'vast_3', 'vast_4', 'l2-norm']
 
         Returns
         -------
@@ -100,29 +101,75 @@ class ROM():
         if n % self.n_features != 0:
             raise Exception('The number of rows of X is not a multiple of n_features')
             exit()
+
+        X_cnt = np.zeros_like(self.X)
+        X_scl = np.zeros_like(self.X)
         
-        X0 = np.zeros_like(self.X)
-
-        if scale_type == 'standard':
-            # Scale the matrix to unitary variance
-            mean_vector = np.zeros((self.n_features))
-            std_vector = np.zeros((self.n_features))
-            for i in range(self.n_features):
-                x = self.X[i*self.n_points:(i+1)*self.n_points, :]
-                mean_vector[i] = np.average(x)
-                std_vector[i] = np.std(x)
-                X0[i*self.n_points:(i+1)*self.n_points, :] = (x -
-                                                    mean_vector[i])/std_vector[i]
-
-            self.mean_vector = mean_vector
-            self.std_vector = std_vector
-        else:
-            raise NotImplementedError('The scaling method selected has not been '\
+        for i in range(self.n_features):
+            x = self.X[i*self.n_points:(i+1)*self.n_points, :]
+            
+            X_cnt[i*self.n_points:(i+1)*self.n_points, :] = np.average(x)
+            
+            if scale_type == 'std':
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.std(x)
+            
+            elif scale_type == 'none':
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = 1.
+            
+            elif scale_type == 'pareto':
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.sqrt(np.std(x))
+            
+            elif scale_type == 'vast':
+                scl_factor = np.std(x)**2/np.average(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+            
+            elif scale_type == 'range':
+                scl_factor = np.max(x) - np.min(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+                
+            elif scale_type == 'level':
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.average(x)
+                
+            elif scale_type == 'max':
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.max(x)
+            
+            elif scale_type == 'variance':
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.var(x)
+            
+            elif scale_type == 'median':
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.median(x)
+            
+            elif scale_type == 'poisson':
+                scl_factor = np.sqrt(np.average(x))
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+            
+            elif scale_type == 'vast_2':
+                scl_factor = (np.std(x)**2 * kurtosis(x, None)**2)/np.average(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+            
+            elif scale_type == 'vast_3':
+                scl_factor = (np.std(x)**2 * kurtosis(x, None)**2)/np.max(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+            
+            elif scale_type == 'vast_4':
+                scl_factor = (np.std(x)**2 * kurtosis(x, None)**2)/(np.max(x)-np.min(x))
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+            
+            elif scale_type == 'l2-norm':
+                scl_factor = np.linalg.norm(x.flatten())
+                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+            
+            else:
+                raise NotImplementedError('The scaling method selected has not been '\
                                       'implemented yet')
+        self.X_cnt = X_cnt
+        self.X_scl = X_scl
+        
+        X0 = (self.X - X_cnt)/X_scl
 
         return X0
             
-    def unscale_data(self, x0, scale_type):
+    def unscale_data(self, x0):
         '''
         Return the unscaled vector.
         
@@ -130,9 +177,7 @@ class ROM():
         ----------
         x0 : numpy array
             Scaled vector to unscale, size (n,).
-        scale_type : str
-            Type of scaling.
-
+        
         Returns
         -------
         x : numpy array
@@ -140,17 +185,12 @@ class ROM():
 
         '''
         
-        x = np.zeros_like(x0)
+        x = cp.multiply(self.X_scl[:,0], x0) + self.X_cnt[:,0]
         
-        if scale_type == 'standard':
-            for i in range(self.n_features):
-                x[i*self.n_points:(i+1)*self.n_points] = self.std_vector[i] * \
-                x0[i*self.n_points:(i+1)*self.n_points] + self.mean_vector[i]
+        if type(x0) is np.ndarray:
+            return x.value
         else:
-            raise NotImplementedError('The scaling method selected has not been '\
-                                      'implemented yet')  
-        
-        return x
+            return x
 
     def decomposition(self, X0, decomp_type='POD', select_modes='variance', n_modes=99, 
                       solver='ECOS', abstol=1e-3, verbose=False):
@@ -218,17 +258,11 @@ class ROM():
             Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
             r = Ar.shape[1]
             
-            std_array = np.zeros(X0.shape[0])
-            mean_array = np.zeros(X0.shape[0])
-            for f in range(self.n_features):
-                std_array[f*self.n_points:(f+1)*self.n_points] = self.std_vector[f]
-                mean_array[f*self.n_points:(f+1)*self.n_points] = self.mean_vector[f]
-            
             Gr = np.zeros_like(Ar)
             for i in range(Ar.shape[0]):
                 g = cp.Variable(r)
                 x0_tilde = Ur @ g
-                x_tilde = cp.multiply(std_array,  (Ur @ g)) + mean_array
+                x_tilde = SPR.unscale_data(self, x0_tilde)
                 
                 objective = cp.Minimize(cp.pnorm(x0_tilde - X0[:,i], p=2))
                 constrs = [x_tilde >= 0]
@@ -304,7 +338,7 @@ class ROM():
 
         return Ur, Ar
 
-    def adaptive_sampling(self, P, scale_type='standard'):
+    def adaptive_sampling(self, P, scale_type='std'):
         '''
         
 
@@ -314,7 +348,7 @@ class ROM():
             The array contains the set of parameters used to build the X matrix, size (p,d).
         
         scale_type : str, optional
-            Type of scaling. The default is 'standard'.
+            Type of scaling. The default is 'std'.
 
         Returns
         -------
@@ -382,21 +416,21 @@ class SPR(ROM):
         
     Methods
     ----------
-    scale_vector(y, scale_type='standard')
+    scale_vector(y, scale_type='std')
         Scales the measurements matrix using the training information.
 
-    optimal_placement(scale_type='standard', select_modes='variance', n_modes=99)
+    optimal_placement(scale_type='std', select_modes='variance', n_modes=99)
         Calculates the C matrix using QRCP decomposition.
     
     gem(Ur, n_sensors, verbose)
         Selects the best sensors' placement based on a greedy entropy maximization
         algorithm.
     
-    fit_predict(C, y, scale_type='standard', select_modes='variance', 
+    fit_predict(C, y, scale_type='std', select_modes='variance', 
                 n_modes=99)
         Calculates the Theta matrix, then predicts ar and reconstructs x.
     
-    predict(y, scale_type='standard'):
+    predict(y, scale_type='std'):
         Predicts ar and reconstructs x.
     
     '''
@@ -405,7 +439,7 @@ class SPR(ROM):
         super().__init__(X, n_features, xyz)
 
 
-    def scale_vector(self, y, scale_type):
+    def scale_vector(self, y):
         '''
         Return the scaled measurement vector.
 
@@ -415,9 +449,6 @@ class SPR(ROM):
             Measurement vector to scale, size (s,2). The first column contains
             the measurements, the second column contains which feature is 
             measured.
-        
-        scale_type : str
-            Type of scaling.
 
         Returns
         -------
@@ -427,12 +458,15 @@ class SPR(ROM):
         '''
         
         y0 = np.zeros((y.shape[0],))
-        if scale_type == 'standard':
-            for i in range(y0.shape[0]):
-                y0[i] = (y[i,0] - self.mean_vector[int(y[i,1])]) / self.std_vector[int(y[i,1])]
-        else:
-            raise NotImplementedError('The scaling method selected has not been '\
-                                      'implemented yet')
+        cnt_vector = np.zeros((self.n_features))
+        scl_vector = np.zeros((self.n_features))
+        
+        for i in range(self.n_features):
+            cnt_vector[i] = self.X_cnt[i*self.n_points,0]
+            scl_vector[i] = self.X_scl[i*self.n_points,0]
+        
+        for i in range(y0.shape[0]):
+            y0[i] = (y[i,0] - cnt_vector[int(y[i,1])]) / scl_vector[int(y[i,1])]
         
         return y0
 
@@ -517,8 +551,8 @@ class SPR(ROM):
                 else:
                     # the noise is added to ensure the singularity of the 
                     # covariance matrix
-                    noise = 1e-5
-                    Sigma_aa_inv = np.linalg.inv(Sigma_aa + noise*np.eye(s))
+                    noise = 1e-5 * np.random.normal(size=Sigma_aa.shape[0])
+                    Sigma_aa_inv = np.linalg.inv(Sigma_aa + np.diag(noise))
                 
                 for j in range(index_msk.size):
                     Sigma = np.cov(Ur_scl[sensor_list_glb, :], Ur_msk[j, :], ddof=1)
@@ -550,9 +584,9 @@ class SPR(ROM):
         optimal_sensors = np.array(sensor_list_glb)
         return optimal_sensors
 
-    def optimal_placement(self, calc_type='qr', n_sensors=10, mask=None, d_min=0., 
-                          scale_type='standard', select_modes='variance', n_modes=99, 
-                          verbose=False):
+    def optimal_placement(self, calc_type='qr', decomp_type='POD', n_sensors=10, 
+                          mask=None, d_min=0., scale_type='std', select_modes='variance', 
+                          n_modes=99, verbose=False):
         '''
         Return the matrix C containing the optimal placement of the sensors.
 
@@ -561,6 +595,10 @@ class SPR(ROM):
         calc_type : str, optional
             Type of algorithm used to compute the C matrix. The available methods
             are 'qr' and 'gem'. The default is 'qr'.
+        
+        decomp_type : str, optional
+            Type of decomposition. The default is 'POD'.
+            If 'CPOD' it will calculate the constrained POD scores.
         
         n_sensors : int, optional
             Number of sensors to calculate. Only used if the algorithm is 'gem'.
@@ -575,7 +613,7 @@ class SPR(ROM):
             Default is 0.0.
         
         scale_type : str, optional
-            Type of scaling. The default is 'standard'.
+            Type of scaling. The default is 'std'.
         
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
@@ -600,7 +638,7 @@ class SPR(ROM):
         n = self.X.shape[0]
 
         X0 = SPR.scale_data(self, scale_type)
-        U, A, exp_variance = SPR.decomposition(self, X0)
+        U, A, exp_variance = SPR.decomposition(self, X0, decomp_type, verbose=verbose)
         Ur, Ar = SPR.reduction(self, U, A, exp_variance, select_modes, n_modes)
         r = Ur.shape[1]
 
@@ -627,7 +665,7 @@ class SPR(ROM):
         
         return C
 
-    def fit_predict(self, C, y, scale_type='standard', select_modes='variance', 
+    def fit_predict(self, C, y, scale_type='std', select_modes='variance', 
                     n_modes=99, method='OLS', solver='ECOS', abstol=1e-3, 
                     verbose=False):
         '''
@@ -645,7 +683,7 @@ class SPR(ROM):
             measured.
         
         scale_type : str, optional
-            Type of scaling method. The default is 'standard'. Standard scaling is the 
+            Type of scaling method. The default is 'std'. Standard scaling is the 
             only scaling implemented for the 'COLS' method.
         
         select_modes : str, optional
@@ -737,25 +775,19 @@ class SPR(ROM):
 
         '''
         if hasattr(self, 'Theta'):
-            y0 = SPR.scale_vector(self, y, self.scale_type)
+            y0 = SPR.scale_vector(self, y)
             
             if self.method == 'OLS':
                 
                 ar, res, rank, s = la.lstsq(self.Theta, y0)
                 x0_rec = self.Ur @ ar
-                
+        
             elif self.method == 'COLS':
                 r = self.Theta.shape[1]
                 g = cp.Variable(r)
                 
-                std_array = np.zeros(self.Ur.shape[0])
-                mean_array = np.zeros(self.Ur.shape[0])
-                for f in range(self.n_features):
-                    std_array[f*self.n_points:(f+1)*self.n_points] = self.std_vector[f]
-                    mean_array[f*self.n_points:(f+1)*self.n_points] = self.mean_vector[f]
-                
-                g = cp.Variable(r)
-                x_tilde = cp.multiply(std_array,  (self.Ur @ g)) + mean_array
+                x0_tilde = self.Ur @ g
+                x_tilde = SPR.unscale_data(self, x0_tilde)
                 
                 objective = cp.Minimize(cp.pnorm(y0 - self.Theta @ g, p=2))
                 constrs = [x_tilde >= 0]
@@ -770,7 +802,7 @@ class SPR(ROM):
                                           'implemented yet')
             
         
-            x_rec = SPR.unscale_data(self, x0_rec, self.scale_type)
+            x_rec = SPR.unscale_data(self, x0_rec)
         else:
             raise AttributeError('The function fit_predict has to be called '\
                                  'before calling predict.')
@@ -778,10 +810,44 @@ class SPR(ROM):
         return ar, x_rec
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':  
+    import numpy as np
+    # from sparse_sensing import SPR
+    import matplotlib as mpl
     import matplotlib.pyplot as plt
     import matplotlib.tri as tri
-#---------------------------------Plotting utilities--------------------------------------------------
+
+    # Replace this with the path where you saved the data directory
+    path = './data/ROM/'
+
+    # This is a n x m matrix where n = 165258 is the number of cells times the number of features
+    # and m = 41 is the number of simulations.
+    X_train = np.load(path + 'X_2D_train.npy')
+
+    # This is a n x 4 matrix containing the 4 testing simulations
+    X_test = np.load(path + 'X_2D_test.npy')
+
+    features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
+    n_features = len(features)
+
+    # This is the file containing the x,z positions of the cells
+    xz = np.load(path + 'xz.npy')
+    n_cells = xz.shape[0]
+    
+    # Create the x,y,z array
+    xyz = np.zeros((n_cells, 3))
+    xyz[:,0] = xz[:,0]
+    xyz[:,2] = xz[:,1]
+
+    # This reads the files containing the parameters (D, H2, phi) with which 
+    # the simulation were computed
+    P_train = np.genfromtxt(path + 'parameters_train.csv', delimiter=',', skip_header=1)
+    P_test = np.genfromtxt(path + 'parameters_test.csv', delimiter=',', skip_header=1)
+
+    # Load the outline the mesh (for plotting)
+    mesh_outline = np.genfromtxt(path + 'mesh_outline.csv', delimiter=',', skip_header=1)
+
+    #---------------------------------Plotting utilities--------------------------------------------------
     def sample_cmap(x):
         return plt.cm.jet((np.clip(x,0,1)))
 
@@ -860,115 +926,39 @@ if __name__ == '__main__':
                     orientation='vertical', label=cbar_label)
         
         plt.show()
-    
-    path = '../data/ROM/'
-    X = np.load(path + 'X_2D_train.npy')
-    X_test = np.load(path + 'X_2D_test.npy')
-    P = np.genfromtxt(path + 'parameters_train.csv', delimiter=',', skip_header=1)
-    xz = np.load(path + 'xz.npy')
-    xyz = np.zeros((xz.shape[0], 3))
-    xyz[:,0] = xz[:,0]
-    xyz[:,2] = xz[:,1]
-    features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
-    n_features = len(features)
-    n_points = xz.shape[0]
-    mesh_outline = np.genfromtxt(path + 'mesh_outline.csv', delimiter=',', skip_header=1)
-    
-    rom = ROM(X, n_features, xyz)
-    X0 = rom.scale_data()
-    U, A, exp_variance = rom.decomposition(X0, decomp_type='POD')
-    Ur, Ar = rom.reduction(U, A, exp_variance, select_modes='variance', n_modes=99.5)
-    
-    spr = SPR(X, n_features, xyz)
-    C = spr.optimal_placement(n_modes=99.5)
 
-    x_test = X[:,0]
-    
-    y = np.zeros((C.shape[0],2))
-    y[:,0] = C @ x_test
+    #---------------------------------Sparse sensing--------------------------------------------------
 
-    for i in range(C.shape[0]):
-        y[i,1] = np.argmax(C[i,:]) // n_points
+    spr = SPR(X_train, n_features, xyz) # Create the spr object
 
-    ap, x_rec_test = spr.fit_predict(C, y, n_modes=99.5, method='COLS', verbose=True)
-    
-    def NRMSE(prediction, observation):
-        RMSE = np.sqrt(np.sum((prediction-observation)**2))/observation.size
-        
-        return RMSE/np.average(observation)
-    
-    error = NRMSE(x_rec_test, x_test)
-    print(f'The NRMSE is {error:.5f}')
+    # Compute the optimal measurement matrix using qr decomposition
+    n_sensors = 14
+    C_qr = spr.optimal_placement(select_modes='number', n_modes=n_sensors)
 
-    mask_pos = xz[:,0] < 0.1
-    mask = np.ones((X.shape[0],), dtype=bool)
-    keep = ['T', 'CO2']
-
-    for f in features:
-        ind = features.index(f)
-        mask[ind*n_points:(ind+1)*n_points][mask_pos] = False
-
-        if f not in keep:
-            mask[ind*n_points:(ind+1)*n_points] = False
-
-    for i in range(n_points):
-        if np.any(X[i,:] > 1500):
-            mask[i] = False
-
-    C_qr = spr.optimal_placement(n_modes=99.5, mask=mask)
-        
     # Get the sensors positions and features
-    n_sensors = C_qr.shape[0]
     xz_sensors = np.zeros((n_sensors, 4))
     for i in range(n_sensors):
         index = np.argmax(C_qr[i,:])
-        xz_sensors[i,:2] = xz[index % n_points, :]
-        xz_sensors[i,2] = index // n_points
+        xz_sensors[i,:2] = xz[index % n_cells, :]
+        xz_sensors[i,2] = index // n_cells
 
     plot_sensors(xz_sensors, features, mesh_outline)
 
     # Sample a test simulation using the optimal qr matrix
     y_qr = np.zeros((n_sensors,2))
-    y_qr[:,0] = C_qr @ X_test[:,0]
+    y_qr[:,0] = C_qr @ X_test[:,3]
 
     for i in range(n_sensors):
-        y_qr[i,1] = np.argmax(C_qr[i,:]) // n_points
+        y_qr[i,1] = np.argmax(C_qr[i,:]) // n_cells
 
     # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
     ap, xp = spr.fit_predict(C_qr, y_qr)
 
     # Select the feature to plot
-    str_ind = 'OH'
+    str_ind = 'T'
     ind = features.index(str_ind)
 
-    plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_points:(ind+1)*n_points, 0], 
-                    xp[ind*n_points:(ind+1)*n_points]], cbar_label=str_ind)
+    plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_cells:(ind+1)*n_cells, 3], 
+                    xp[ind*n_cells:(ind+1)*n_cells]], cbar_label=str_ind)
 
-    C_gem = spr.optimal_placement(calc_type='gem', n_sensors=20, mask=None, d_min=0., 
-                          scale_type='standard', select_modes='variance', n_modes=99.5, 
-                          verbose=True)
-    
-    n_sensors = C_gem.shape[0]
-    xz_sensors = np.zeros((n_sensors, 4))
-    for i in range(n_sensors):
-        index = np.argmax(C_gem[i,:])
-        xz_sensors[i,:2] = xz[index % n_points, :]
-        xz_sensors[i,2] = index // n_points
-
-    plot_sensors(xz_sensors, features, mesh_outline)
-
-    y_gem = np.zeros((n_sensors,2))
-    y_gem[:,0] = C_gem @ X_test[:,0]
-
-    for i in range(n_sensors):
-        y_gem[i,1] = np.argmax(C_gem[i,:]) // n_points
-
-    # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
-    ap, xp = spr.fit_predict(C_gem, y_gem)
-
-    # Select the feature to plot
-    str_ind = 'OH'
-    ind = features.index(str_ind)
-
-    plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_points:(ind+1)*n_points, 0], 
-                    xp[ind*n_points:(ind+1)*n_points]], cbar_label=str_ind)
+  
