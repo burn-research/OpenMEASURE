@@ -811,14 +811,12 @@ class SPR(ROM):
 
 
 if __name__ == '__main__':  
-    import numpy as np
-    # from sparse_sensing import SPR
     import matplotlib as mpl
     import matplotlib.pyplot as plt
     import matplotlib.tri as tri
 
     # Replace this with the path where you saved the data directory
-    path = './data/ROM/'
+    path = '../data/ROM/'
 
     # This is a n x m matrix where n = 165258 is the number of cells times the number of features
     # and m = 41 is the number of simulations.
@@ -933,7 +931,7 @@ if __name__ == '__main__':
 
     # Compute the optimal measurement matrix using qr decomposition
     n_sensors = 14
-    C_qr = spr.optimal_placement(select_modes='number', n_modes=n_sensors)
+    C_qr = spr.optimal_placement(select_modes='number', n_modes=n_sensors, scale_type='pareto')
 
     # Get the sensors positions and features
     xz_sensors = np.zeros((n_sensors, 4))
@@ -952,7 +950,7 @@ if __name__ == '__main__':
         y_qr[i,1] = np.argmax(C_qr[i,:]) // n_cells
 
     # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
-    ap, xp = spr.fit_predict(C_qr, y_qr)
+    ap, xp = spr.fit_predict(C_qr, y_qr, scale_type='pareto')
 
     # Select the feature to plot
     str_ind = 'T'

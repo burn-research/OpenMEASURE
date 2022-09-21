@@ -13,12 +13,12 @@ MODULE: gpr.py
 import numpy as np
 import torch
 import gpytorch
+from scipy.stats import kurtosis
 from gpytorch.likelihoods import MultitaskGaussianLikelihood
 from gpytorch.means import ConstantMean
 from gpytorch.kernels import ScaleKernel, MaternKernel
 from gpytorch.distributions import MultitaskMultivariateNormal, MultivariateNormal
 from gpytorch.mlls import ExactMarginalLogLikelihood
-# from sparse_sensing import *
 import sparse_sensing as sps
 
 class BatchIndipendentMultitaskGPModel(gpytorch.models.ExactGP):
@@ -79,13 +79,16 @@ class GPR(sps.ROM):
     X : numpy array
         data matrix of dimensions (n,p) where n = n_features * n_points and p
         is the number of operating conditions.
+        
+    n_features : int
+        the number of features in the dataset (temperature, velocity, etc.).
+    
+    xyz : numpy array
+        3D position of the data in X, size (nx3).
     
     P : numpy array
         Design features matrix of dimensions (p,d) where p is the number of 
         operating conditions.
-        
-    n_features : int
-        the number of features in the dataset (temperature, velocity, etc.).
         
     Methods
     ----------
@@ -95,11 +98,11 @@ class GPR(sps.ROM):
     unscale_coefficients(scale_type)
         Unscale the coefficients.
     
-    fit_predict(xs, scale_type='standard', select_modes='variance', 
+    fit_predict(xs, scale_type='std', select_modes='variance', 
                 n_modes=99)
         Trains the GPR model, then predicts ar and reconstructs x.
     
-    predict(xs, scale_type='standard'):
+    predict(xs, scale_type='std'):
         Predicts ar and reconstructs x.
     
     '''
@@ -109,46 +112,92 @@ class GPR(sps.ROM):
         self.P = P
 
 
-    def scale_GPR_data(self, D, scale_type):
+    def scale_GPR_data(self, P, scale_type):
         '''
         Return the scaled input and target for the GPR model.
 
         Parameters
         ----------
-        D : numpy array
-            Data matrix to scale, size (p,d+q). The first d columns contain
-            the design features, the second q columns contains the decomposition
-            coefficients.
+        P : numpy array
+            Data matrix to scale, size (p,d). 
+        
         scale_type : str
             Type of scaling.
 
         Returns
         -------
-        D0: numpy array
+        P0: numpy array
             The scaled measurement vector.
 
         '''
         
-        D0 = np.zeros_like(D)
-        GPR_scale_mean = np.zeros((D.shape[1]))
-        GPR_scale_std = np.zeros((D.shape[1]))
-        if scale_type == 'standard':
-            GPR_scale_mean = np.mean(D, axis=0)
-            GPR_scale_std = np.std(D, axis=0)
+        P_cnt = np.zeros_like(P)
+        P_scl = np.zeros_like(P)
+        
+        for i in range(P.shape[1]):
+            x = P[:,i]
+            P_cnt[:,i] = np.mean(x)
             
-            for i in range(D.shape[1]):
-                D0[:,i] = (D[:,i] - GPR_scale_mean[i]) / GPR_scale_std[i]
-        
-            self.GPR_scale_mean = GPR_scale_mean
-            self.GPR_scale_std = GPR_scale_std
-        else:
-            raise NotImplementedError('The scaling method selected has not been '\
-                                      'implemented yet')
-        
-        return D0    
+            if scale_type == 'std':
+                P_scl[:,i] = np.std(x)
+            
+            elif scale_type == 'none':
+                P_scl[:,i] = 1.
+            
+            elif scale_type == 'pareto':
+                P_scl[:,i] = np.sqrt(np.std(x))
+            
+            elif scale_type == 'vast':
+                scl_factor = np.std(x)**2/np.average(x)
+                P_scl[:,i] = scl_factor
+            
+            elif scale_type == 'range':
+                scl_factor = np.max(x) - np.min(x)
+                P_scl[:,i] = scl_factor
+                
+            elif scale_type == 'level':
+                P_scl[:,i] = np.average(x)
+                
+            elif scale_type == 'max':
+                P_scl[:,i] = np.max(x)
+            
+            elif scale_type == 'variance':
+                P_scl[:,i] = np.var(x)
+            
+            elif scale_type == 'median':
+                P_scl[:,i] = np.median(x)
+            
+            elif scale_type == 'poisson':
+                scl_factor = np.sqrt(np.average(x))
+                P_scl[:,i] = scl_factor
+            
+            elif scale_type == 'vast_2':
+                scl_factor = (np.std(x)**2 * kurtosis(x, None)**2)/np.average(x)
+                P_scl[:,i] = scl_factor
+            
+            elif scale_type == 'vast_3':
+                scl_factor = (np.std(x)**2 * kurtosis(x, None)**2)/np.max(x)
+                P_scl[:,i] = scl_factor
+            
+            elif scale_type == 'vast_4':
+                scl_factor = (np.std(x)**2 * kurtosis(x, None)**2)/(np.max(x)-np.min(x))
+                P_scl[:,i] = scl_factor
+            
+            elif scale_type == 'l2-norm':
+                scl_factor = np.linalg.norm(x.flatten())
+                P_scl[:,i] = scl_factor
+            
+            else:
+                raise NotImplementedError('The scaling method selected has not been '\
+                                          'implemented yet')
+                    
+        self.P_cnt = P_cnt
+        self.P_scl = P_scl
+        P0 = (P - P_cnt)/P_scl
+        return P0    
 
 
-    def fit_predict(self, xs, scale_type='standard', select_modes='variance', 
+    def fit_predict(self, xs, scaleX_type='std', scaleP_type='std', select_modes='variance', 
                     n_modes=99, mean=None, kernel=None, max_iter=1000, 
                     rel_error=1e-5, verbose=False, save_path=None):
         '''
@@ -159,24 +208,34 @@ class GPR(sps.ROM):
         ----------
         xs : numpy array
             The set of design features to evaluate the prediction, size (n_p,d).
-        scale_type : str, optional
-            Type of scaling method. The default is 'standard'.
+            
+        scaleX_type : str, optional
+            Type of scaling method for the data matrix. The default is 'std'.
+        
+        scaleP_type : str, optional
+            Type of scaling method for the parameters. The default is 'std'.
+        
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
             options are 'variance' or 'number'.
+            
         n_modes : int or float, optional
             Parameters that control the amount of modes retained. The default is 
             99, which represents 99% of the variance. If select_modes='number',
             n_modes represents the number of modes retained.
+            
         max_iter : int, optional
             Maximum number of iterations to train the hyperparameters. The default
             is 1000.
+            
         rel_error : float, optional
             Minimum relative error below which the training of hyperparameters is
             stopped. The default is 1e-5.
+            
         verbose : bool, optional
             If True, it will print informations on the training of the hyperparameters.
             The default is False.
+            
         save_path : str, optional.
             String containing the path where to save the model (extension .pth).
             The default is None, and the model is not saved.
@@ -185,31 +244,40 @@ class GPR(sps.ROM):
         -------
         A_pred : numpy array
             The low-dimensional projection of the state of the system, size (n_p,q)
-        Sigma : numpy array
+            
+        Sigma_dev : numpy array
             Uncertainty in the prediction, size (n_p,q)
         
         '''
         
-        self.scale_type = scale_type
-        X0 = self.scale_data(scale_type)
+        self.scaleX_type = scaleX_type
+        self.scaleP_type = scaleP_type
+        
+        X0 = self.scale_data(scaleX_type)
         U, A, exp_variance = self.decomposition(X0)
         Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
+        
         self.Ur = Ur
         self.Ar = Ar
         self.r = Ar.shape[1]
         self.d = self.P.shape[1]
-        p = Ar.shape[0]
         
-        D = np.zeros((p, self.d + self.r))
-        D[:, :self.d] = self.P
-        D[:, self.d:] = Ar
+        # Get the singular values and the orthonormal basis
+        Vr = np.zeros_like(Ar)
+        Sigma_r = np.zeros((self.r,))
+        for i in range(self.r):
+            Sigma_r[i] = np.linalg.norm(Ar[:,i])
+            Vr[:,i] = Ar[:,i]/Sigma_r[i]
         
-        D0 = GPR.scale_GPR_data(self, D, scale_type)
-        P0_torch = torch.from_numpy(D0[:, :self.d]).contiguous().float()
-        A0_torch = torch.from_numpy(D0[:, self.d:]).contiguous().float() 
+        self.Sigma_r = Sigma_r
+        
+        P0 = GPR.scale_GPR_data(self, self.P, scaleP_type)
+        
+        P0_torch = torch.from_numpy(P0).contiguous().float()
+        Vr_torch = torch.from_numpy(Vr).contiguous().float()
         
         likelihood = MultitaskGaussianLikelihood(num_tasks=self.r)
-        model = BatchIndipendentMultitaskGPModel(P0_torch, A0_torch, likelihood,
+        model = BatchIndipendentMultitaskGPModel(P0_torch, Vr_torch, likelihood,
                                                  mean=mean, kernel=kernel)
         
         # Find optimal model hyperparameters
@@ -228,7 +296,7 @@ class GPR(sps.ROM):
         while (e > rel_error) and (i < max_iter):
             optimizer.zero_grad()
             output = model(P0_torch)
-            loss = -mll(output, A0_torch)
+            loss = -mll(output, Vr_torch)
             loss.backward()
             e = torch.abs(loss - loss_old).item()
             loss_old = loss
@@ -245,9 +313,9 @@ class GPR(sps.ROM):
         self.model = model
         self.likelihood = likelihood
         
-        A_pred, Sigma = self.predict(xs)
+        A_pred, Sigma_dev = self.predict(xs)
         
-        return A_pred, Sigma
+        return A_pred, Sigma_dev
     
     def predict(self, xs):
         '''
@@ -263,7 +331,8 @@ class GPR(sps.ROM):
         -------
         A_pred : numpy array
             The low-dimensional projection of the state of the system, size (n_p,r)
-        Sigma : numpy array
+        
+        Sigma_dev : numpy array
             Uncertainty in the prediction, size (n_p,r)
 
         '''
@@ -280,28 +349,22 @@ class GPR(sps.ROM):
             
             xs0 = np.zeros_like(xs)
             for i in range(xs.shape[1]):
-                xs0[:,i] = (xs[:,i] - self.GPR_scale_mean[i]) / self.GPR_scale_std[i]
-
+                xs0[:,i] = (xs[:,i] - self.P_cnt[0,i]) / self.P_scl[0,i]
+            
             xs0_torch = torch.from_numpy(xs0).contiguous().float()
             observed_pred = self.likelihood(self.model(xs0_torch))
-            A0_pred = observed_pred.mean.detach().numpy()
+            V_pred = observed_pred.mean.detach().numpy()
             
-            A0_cov = observed_pred.lazy_covariance_matrix
-            Sigma0 = np.sqrt(A0_cov.diag().detach().numpy())
-            Sigma0 = Sigma0.reshape((n_p, self.r))
-            
-            A_pred = np.zeros_like(A0_pred)
-            Sigma = np.zeros_like(Sigma0)
-            
-            for i in range(A_pred.shape[1]):
-                A_pred[:,i] = self.GPR_scale_std[self.d+i] * A0_pred[:, i] + self.GPR_scale_mean[self.d+i]
-                Sigma[:,i] = self.GPR_scale_std[self.d+i] * Sigma0[:, i] + self.GPR_scale_mean[self.d+i]
+            V_cov = observed_pred.lazy_covariance_matrix
+            SigmaV_dev = np.sqrt(V_cov.diag().detach().numpy())
+            SigmaV_dev = SigmaV_dev.reshape((n_p, self.r))
             
         else:
             raise AttributeError('The function fit_predict has to be called '\
                                   'before calling predict.')
-            
-        return A_pred, Sigma
+        A_pred = self.Sigma_r * V_pred
+        Sigma_dev = self.Sigma_r * SigmaV_dev
+        return A_pred, Sigma_dev
 
     def reconstruct(self, Ar):
         '''
@@ -324,20 +387,17 @@ class GPR(sps.ROM):
         X_rec = np.zeros((n, n_p))
         for i in range(n_p):
             x0_rec = self.Ur @ Ar[i,:]
-            X_rec[:,i] = self.unscale_data(x0_rec, self.scale_type)
+            X_rec[:,i] = self.unscale_data(x0_rec)
 
         return X_rec
     
 if __name__ == '__main__':
-    import numpy as np
-    # from gpr import GPR
-    # from sparse_sensing import SPR
     import matplotlib as mpl
     import matplotlib.pyplot as plt
     import matplotlib.tri as tri
 
     # Replace this with the path where you saved the data directory
-    path = './data/ROM/'
+    path = '../data/ROM/'
 
     # This is a n x m matrix where n = 165258 is the number of cells times the number of features
     # and m = 41 is the number of simulations.
