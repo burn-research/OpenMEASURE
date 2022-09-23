@@ -164,11 +164,11 @@ for i in range(n_sensors):
 plot_sensors(xz_sensors, features, mesh_outline)
 
 # Sample a test simulation using the optimal qr matrix
-y_qr = np.zeros((n_sensors,2))
+y_qr = np.ones((n_sensors,3))
 y_qr[:,0] = C_qr @ X_test[:,3]
 
 for i in range(n_sensors):
-    y_qr[i,1] = np.argmax(C_qr[i,:]) // n_cells
+    y_qr[i,2] = np.argmax(C_qr[i,:]) // n_cells
 
 # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
 ap, xp = spr.fit_predict(C_qr, y_qr)
