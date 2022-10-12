@@ -453,7 +453,7 @@ class SPR(ROM):
         Returns
         -------
         y0: numpy array
-            The scaled measurement vector, size (s,2).
+            The scaled measurement vector, size (s,3).
 
         '''
         
@@ -731,7 +731,7 @@ class SPR(ROM):
                               ' of rows of X.')
         if y.shape[1] != 3:
             raise ValueError('The y array has the wrong number of columns. y has' \
-                              ' to have dimensions (s,2).')
+                              ' to have dimensions (s,3).')
         
         self.scale_type = scale_type
         X0 = SPR.scale_data(self, scale_type)
@@ -780,7 +780,11 @@ class SPR(ROM):
         '''
         if hasattr(self, 'Theta'):
             y0 = SPR.scale_vector(self, y)
-            W = np.diag(1/y0[:,1])  #Weights used for the weighted OLS and COLS
+            
+            if not np.any(y[:,1]):
+                W = np.eye(y.shape[0])
+            else:
+                W = np.diag(1/y0[:,1])  #Weights used for the weighted OLS and COLS
             
             if self.method == 'OLS':
                 
@@ -948,7 +952,7 @@ if __name__ == '__main__':
     plot_sensors(xz_sensors, features, mesh_outline)
 
     # Sample a test simulation using the optimal qr matrix
-    y_qr = np.ones((n_sensors,3))
+    y_qr = np.zeros((n_sensors,3))
     y_qr[:,0] = C_qr @ X_test[:,3]
 
     for i in range(n_sensors):
