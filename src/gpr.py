@@ -67,7 +67,8 @@ class BatchIndipendentMultitaskGPModel(gpytorch.models.ExactGP):
     def forward(self, x):
         mean_x = self.mean_module(x)
         kernel_x = self.covar_module(x)
-        return MultitaskMultivariateNormal.from_batch_mvn(MultivariateNormal(mean_x, kernel_x))
+        return MultitaskMultivariateNormal.from_batch_mvn(MultivariateNormal(mean_x, 
+                                                                             kernel_x))
     
 
 class GPR(sps.ROM):
@@ -301,7 +302,7 @@ class GPR(sps.ROM):
             e = torch.abs(loss - loss_old).item()
             loss_old = loss
             if verbose == True:
-                print('Iter %d/%d - Loss: %.3f - Noise: %.3f'
+                print('Iter %d/%d - Loss: %.2e - Noise: %.2e'
                       % (i + 1, max_iter, loss.item(), model.likelihood.noise.item()))
 
             optimizer.step()
@@ -352,7 +353,7 @@ class GPR(sps.ROM):
                 xs0[:,i] = (xs[:,i] - self.P_cnt[0,i]) / self.P_scl[0,i]
             
             xs0_torch = torch.from_numpy(xs0).contiguous().float()
-            observed_pred = self.likelihood(self.model(xs0_torch))
+            observed_pred = self.model(xs0_torch)
             V_pred = observed_pred.mean.detach().numpy()
             
             V_cov = observed_pred.lazy_covariance_matrix

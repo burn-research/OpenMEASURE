@@ -667,7 +667,7 @@ class SPR(ROM):
         return C
 
     def fit_predict(self, C, y, scale_type='std', select_modes='variance', 
-                    n_modes=99, method='OLS', solver='ECOS', abstol=1e-3, 
+                    n_modes=99, method='OLS', solver='ECOS', abstol=1e-3, cond=False,
                     verbose=False):
         '''
         Fit the taylored basis and the measurement matrix.
@@ -729,6 +729,9 @@ class SPR(ROM):
         if C.shape[1] != self.X.shape[0]:
             raise ValueError('The number of columns of C does not match the number' \
                               ' of rows of X.')
+        if y.ndim < 2:
+            raise ValueError('The y array has the wrong number of columns. y has' \
+                              ' to have dimensions (s,3).')
         if y.shape[1] != 3:
             raise ValueError('The y array has the wrong number of columns. y has' \
                               ' to have dimensions (s,3).')
@@ -747,14 +750,16 @@ class SPR(ROM):
         self.verbose = verbose
         
         # calculate the condition number
-        if Theta.shape[0] == Theta.shape[1]:
-            U_theta, S_theta, V_thetat = np.linalg.svd(Theta)
-            self.k = S_theta[0]/S_theta[-1]
-        else:
-            Theta_pinv = np.linalg.pinv(Theta)
-            U_theta, S_theta, V_thetat = np.linalg.svd(Theta_pinv)
-            self.k = S_theta[0]/S_theta[-1]
         
+        if cond == True:
+            if Theta.shape[0] == Theta.shape[1]:
+                U_theta, S_theta, V_thetat = np.linalg.svd(Theta)
+                self.k = S_theta[0]/S_theta[-1]
+            else:
+                Theta_pinv = np.linalg.pinv(Theta)
+                U_theta, S_theta, V_thetat = np.linalg.svd(Theta_pinv)
+                self.k = S_theta[0]/S_theta[-1]
+            
         ar, x_rec = SPR.predict(self, y)
         return ar, x_rec
     
@@ -958,6 +963,7 @@ if __name__ == '__main__':
     for i in range(n_sensors):
         y_qr[i,2] = np.argmax(C_qr[i,:]) // n_cells
 
+    
     # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
     ap, xp = spr.fit_predict(C_qr, y_qr)
 
