@@ -198,8 +198,9 @@ class GPR(sps.ROM):
         return P0    
 
 
-    def fit_predict(self, xs, scaleX_type='std', scaleP_type='std', select_modes='variance', 
-                    n_modes=99, mean=None, kernel=None, max_iter=1000, 
+    def fit_predict(self, xs, scaleX_type='std', scaleP_type='std',  
+                    select_modes='variance', decomp_type='POD', n_modes=99, 
+                    mean=None, kernel=None, max_iter=1000, solver='ECOS', abstol=1e-3,
                     rel_error=1e-5, verbose=False, save_path=None):
         '''
         Fit the GPR model.
@@ -255,8 +256,9 @@ class GPR(sps.ROM):
         self.scaleP_type = scaleP_type
         
         X0 = self.scale_data(scaleX_type)
-        U, A, exp_variance = self.decomposition(X0)
-        Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
+        
+        Ur, Ar, exp_variance_r = self.decomposition(X0, decomp_type, select_modes, n_modes, solver, abstol, verbose)
+        # Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
         
         self.Ur = Ur
         self.Ar = Ar
@@ -271,7 +273,6 @@ class GPR(sps.ROM):
             Vr[:,i] = Ar[:,i]/Sigma_r[i]
         
         self.Sigma_r = Sigma_r
-        
         P0 = GPR.scale_GPR_data(self, self.P, scaleP_type)
         
         P0_torch = torch.from_numpy(P0).contiguous().float()
@@ -511,7 +512,7 @@ if __name__ == '__main__':
     gpr = GPR(X_train, n_features, xyz, P_train)
 
     # Calculates the POD coefficients ap and the uncertainty for the test simulations
-    Ap, Sigmap = gpr.fit_predict(P_test, verbose=True)
+    Ap, Sigmap = gpr.fit_predict(P_test, decomp_type='CPOD', verbose=True)
 
     # Reconstruct the high-dimensional state from the POD coefficients
     Xp = gpr.reconstruct(Ap)

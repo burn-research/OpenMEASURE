@@ -243,8 +243,10 @@ class ROM():
             A = np.matmul(np.diag(S), Vt).T
             L = S**2    # Compute the eigenvalues
             exp_variance = 100*np.cumsum(L)/np.sum(L)
-            
-            return U, A, exp_variance
+            Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
+            r = Ar.shape[1]
+
+            return Ur, Ar, exp_variance[:r]
         
         elif decomp_type == 'CPOD':
             # The constrained POD selects the POD scores by solving a constrained
@@ -587,7 +589,7 @@ class SPR(ROM):
 
     def optimal_placement(self, calc_type='qr', decomp_type='POD', n_sensors=10, 
                           mask=None, d_min=0., scale_type='std', select_modes='variance', 
-                          n_modes=99, verbose=False):
+                          n_modes=99, solver='ECOS', abstol=1e-3, verbose=False):
         '''
         Return the matrix C containing the optimal placement of the sensors.
 
@@ -625,6 +627,14 @@ class SPR(ROM):
             99, which represents 99% of the variance. If select_modes='number',
             n_modes represents the number of modes retained.
         
+        solver : str, optional
+            Type of solver to use for solving the constrained minimization problem.
+            Refer to the cvxpy documentation. The default is 'ECOS'.
+
+        abstol : float, optional
+            Absolute accuracy for the constrained solver used for CPOD. 
+            Default is 1e-3.
+
         verbose : bool, optional.
             If True, it will output the results of the computation used for the
             gem algorithm. Default is False.
@@ -639,8 +649,8 @@ class SPR(ROM):
         n = self.X.shape[0]
 
         X0 = SPR.scale_data(self, scale_type)
-        U, A, exp_variance = SPR.decomposition(self, X0, decomp_type, verbose=verbose)
-        Ur, Ar = SPR.reduction(self, U, A, exp_variance, select_modes, n_modes)
+        Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, select_modes, n_modes, 
+                                               solver, abstol, verbose)
         r = Ur.shape[1]
 
         if calc_type == 'qr':
@@ -666,7 +676,7 @@ class SPR(ROM):
         
         return C
 
-    def fit_predict(self, C, y, scale_type='std', select_modes='variance', 
+    def fit_predict(self, C, y, scale_type='std', decomp_type='POD', select_modes='variance', 
                     n_modes=99, method='OLS', solver='ECOS', abstol=1e-3, cond=False,
                     verbose=False):
         '''
@@ -686,6 +696,10 @@ class SPR(ROM):
         scale_type : str, optional
             Type of scaling method. The default is 'std'. Standard scaling is the 
             only scaling implemented for the 'COLS' method.
+
+        decomp_type : str, optional
+            Type of decomposition. The default is 'POD'.
+            If 'CPOD' it will calculate the constrained POD scores.
         
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
@@ -738,8 +752,8 @@ class SPR(ROM):
         
         self.scale_type = scale_type
         X0 = SPR.scale_data(self, scale_type)
-        U, A, exp_variance = SPR.decomposition(self, X0)
-        Ur, Ar = SPR.reduction(self, U, A, exp_variance, select_modes, n_modes)
+        Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, select_modes, n_modes, solver, abstol, verbose)
+        # Ur, Ar = SPR.reduction(U, A, exp_variance, select_modes, n_modes)
         self.Ur = Ur
         
         Theta = C @ Ur
@@ -954,7 +968,7 @@ if __name__ == '__main__':
         xz_sensors[i,:2] = xz[index % n_cells, :]
         xz_sensors[i,2] = index // n_cells
 
-    plot_sensors(xz_sensors, features, mesh_outline)
+    # plot_sensors(xz_sensors, features, mesh_outline)
 
     # Sample a test simulation using the optimal qr matrix
     y_qr = np.zeros((n_sensors,3))
@@ -965,7 +979,8 @@ if __name__ == '__main__':
 
     
     # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
-    ap, xp = spr.fit_predict(C_qr, y_qr)
+    ap, xp = spr.fit_predict(C_qr, y_qr, decomp_type='CPOD', verbose=True, select_modes='number',
+                             n_modes=14)
 
     # Select the feature to plot
     str_ind = 'T'
