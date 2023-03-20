@@ -10,6 +10,7 @@ MODULE: gpr.py
     Please report any bug to: alberto.procacci@ulb.be
 '''
 
+import copy
 import numpy as np
 import torch
 import gpytorch
@@ -20,6 +21,47 @@ from gpytorch.kernels import ScaleKernel, MaternKernel
 from gpytorch.distributions import MultitaskMultivariateNormal, MultivariateNormal
 from gpytorch.mlls import ExactMarginalLogLikelihood
 import sparse_sensing as sps
+
+class ExactGPModel(gpytorch.models.ExactGP):
+    '''
+    Subclass used to build an exact GP Model inheriting from the ExactGP model.
+    
+    Attributes
+    ----------
+    X_train : numpy array
+        matrix of dimensions (p,d) where p is the number of operating conditions
+        and d is the number of design features.
+    
+    Y_train : numpy array
+        matrix of dimensions (p,q) where p is the number of operating conditions
+        and q is the number of retained coefficients.
+
+    likelihood : gpytorch.likelihoods
+        one dimensional likelihood from gpytorch.likelihoods.
+        
+    mean : gpytorch.means
+        mean function gpytorch.means.
+    
+    kernel : gpytorch.kernels
+        kernel function from gpytorch.kernels.
+        
+    Methods
+    ----------
+    forward(x)
+        Return the multivariate distribution given the input x.
+    
+    '''
+    
+    def __init__(self, X_train, Y_train, likelihood, mean, kernel):
+        super().__init__(X_train, Y_train, likelihood)
+        
+        self.mean_module = mean
+        self.covar_module = ScaleKernel(kernel)
+            
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        kernel_x = self.covar_module(x)
+        return MultivariateNormal(mean_x, kernel_x)
 
 class BatchIndipendentMultitaskGPModel(gpytorch.models.ExactGP):
     '''
@@ -36,9 +78,14 @@ class BatchIndipendentMultitaskGPModel(gpytorch.models.ExactGP):
         matrix of dimensions (p,q) where p is the number of operating conditions
         and q is the number of retained coefficients.
         
-    mean : mean function from gpytorch
+    likelihood : gpytorch.likelihoods.MultitaskGaussianLikelihood
+        multi-dimensional likelihood from gpytorch.likelihoods.MultitaskGaussianLikelihood.
+        
+    mean : gpytorch.means
+        mean function gpytorch.means.
     
-    kernel : kernel function from gpytorch    
+    kernel : gpytorch.kernels
+        kernel function from gpytorch.kernels.    
         
     Methods
     ----------
@@ -47,30 +94,29 @@ class BatchIndipendentMultitaskGPModel(gpytorch.models.ExactGP):
     
     '''
     
-    def __init__(self, X_train, Y_train, likelihood, mean=None, kernel=None):
+    def __init__(self, X_train, Y_train, likelihood, mean, kernel):
         super().__init__(X_train, Y_train, likelihood)
         
         self.n_tasks = Y_train.shape[1]
         shape = torch.Size([self.n_tasks])
         
-        if mean == None:
-            self.mean_module = ConstantMean(batch_shape=shape)
-        else:
+        if len(mean.batch_shape) > 0:
             self.mean_module = mean
-        
-        if kernel == None:    
-            self.covar_module = ScaleKernel(MaternKernel(nu=2.5, batch_shape=shape), 
-                                      batch_shape=shape)
         else:
+            self.mean_module = ConstantMean(batch_shape=shape)
+        
+        if len(kernel.batch_shape) > 0:
             self.covar_module = ScaleKernel(kernel, batch_shape=shape)
-            
+        else:
+            self.covar_module = ScaleKernel(MaternKernel(batch_shape=shape), 
+                                                         batch_shape=shape)
+        
     def forward(self, x):
         mean_x = self.mean_module(x)
         kernel_x = self.covar_module(x)
         return MultitaskMultivariateNormal.from_batch_mvn(MultivariateNormal(mean_x, 
                                                                              kernel_x))
     
-
 class GPR(sps.ROM):
     '''
     Class used for building a GPR-based ROM.
@@ -90,6 +136,24 @@ class GPR(sps.ROM):
     P : numpy array
         Design features matrix of dimensions (p,d) where p is the number of 
         operating conditions.
+    
+    gpr_type : str, optional.
+        If 'SingleTask', a GPR model is trained for each of the r latent dimensions.
+        If 'MultiTask', the a single multitask GPR is trained for all the latent dimensions.
+        The default is 'SingleTask'. 
+    
+    likelihood : gpytorch.likelihoods, optional
+        The likelihood passed to the GPR model. If gpr_type='SingleTask', the default 
+        is GaussianLikelihood(). If gpr_type='MultiTask', the MultitaskGaussianLikelihood()
+        is the only option.
+
+    mean : gpytorch.means, optional.
+        The mean passed to the GPR model. The default is means.ConstantMean.
+
+    kernel : gpytorch.kernels, optional.
+        The kernel used for the computation of the covariance matrix. The default
+        is the Matern kernel.
+        
         
     Methods
     ----------
@@ -108,10 +172,24 @@ class GPR(sps.ROM):
     
     '''
 
-    def __init__(self, X, n_features, xyz, P):
+    def __init__(self, X, n_features, xyz, P, gpr_type='SingleTask', likelihood=None, 
+                 kernel=None, mean=None):
         super().__init__(X, n_features, xyz)
         self.P = P
-
+        self.gpr_type = gpr_type
+        
+        if likelihood is None:
+            self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
+        else:
+            self.likelihood = likelihood
+        if kernel is None:
+            self.kernel = gpytorch.kernels.MaternKernel(2.5)
+        else:
+            self.kernel = kernel
+        if mean is None:
+            self.mean = gpytorch.means.ConstantMean()
+        else:
+            self.mean = mean
 
     def scale_GPR_data(self, P, scale_type):
         '''
@@ -197,11 +275,9 @@ class GPR(sps.ROM):
         P0 = (P - P_cnt)/P_scl
         return P0    
 
-
-    def fit_predict(self, xs, scaleX_type='std', scaleP_type='std',  
-                    select_modes='variance', decomp_type='POD', n_modes=99, 
-                    mean=None, kernel=None, max_iter=1000, solver='ECOS', abstol=1e-3,
-                    rel_error=1e-5, verbose=False, save_path=None):
+    def fit(self, scaleX_type='std', scaleP_type='std', select_modes='variance', decomp_type='POD', 
+            n_modes=99, max_iter=1000, solver='ECOS', abstol=1e-3, rel_error=1e-5, verbose=False, 
+            save_path=None):
         '''
         Fit the GPR model.
         Return the prediction vector.
@@ -225,7 +301,7 @@ class GPR(sps.ROM):
             Parameters that control the amount of modes retained. The default is 
             99, which represents 99% of the variance. If select_modes='number',
             n_modes represents the number of modes retained.
-            
+        
         max_iter : int, optional
             Maximum number of iterations to train the hyperparameters. The default
             is 1000.
@@ -258,7 +334,6 @@ class GPR(sps.ROM):
         X0 = self.scale_data(scaleX_type)
         
         Ur, Ar, exp_variance_r = self.decomposition(X0, decomp_type, select_modes, n_modes, solver, abstol, verbose)
-        # Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
         
         self.Ur = Ur
         self.Ar = Ar
@@ -278,46 +353,89 @@ class GPR(sps.ROM):
         P0_torch = torch.from_numpy(P0).contiguous().float()
         Vr_torch = torch.from_numpy(Vr).contiguous().float()
         
-        likelihood = MultitaskGaussianLikelihood(num_tasks=self.r)
-        model = BatchIndipendentMultitaskGPModel(P0_torch, Vr_torch, likelihood,
-                                                 mean=mean, kernel=kernel)
+        if self.gpr_type == 'MultiTask':
+            models = []
+            likelihoods = []
+            likelihoods.append(MultitaskGaussianLikelihood(num_tasks=self.r))
+            models.append(BatchIndipendentMultitaskGPModel(P0_torch, Vr_torch, likelihoods[0], 
+                                                           self.mean, self.kernel))
         
-        # Find optimal model hyperparameters
-        model.train()
-        likelihood.train()
+            # Find optimal model hyperparameters
+            models[0].train()
+            likelihoods[0].train()
+            
+            # Use the adam optimizer
+            # Includes GaussianLikelihood parameters
+            optimizer = torch.optim.Adam(models[0].parameters(), lr=0.1)
 
-        # Use the adam optimizer
-        # Includes GaussianLikelihood parameters
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+            # "Loss" for GPs - the marginal log likelihood
+            mll = ExactMarginalLogLikelihood(likelihoods[0], models[0])
+            loss_old = 1e10
+            e = 1e10
+            i = 0
+            while (e > rel_error) and (i < max_iter):
+                optimizer.zero_grad()
+                output = models[0](P0_torch)
+                loss = -mll(output, Vr_torch)
+                loss.backward()
+                e = torch.abs(loss - loss_old).item()
+                loss_old = loss
+                if verbose == True:
+                    print(f'Iter {i+1:d}/{max_iter:d} - Loss: {loss.item():.2e} - ' \
+                         f'Noise: {models[0].likelihood.noise.item():.2e}')
 
-        # "Loss" for GPs - the marginal log likelihood
-        mll = ExactMarginalLogLikelihood(likelihood, model)
-        loss_old = 1e10
-        e = 1e10
-        i = 0
-        while (e > rel_error) and (i < max_iter):
-            optimizer.zero_grad()
-            output = model(P0_torch)
-            loss = -mll(output, Vr_torch)
-            loss.backward()
-            e = torch.abs(loss - loss_old).item()
-            loss_old = loss
-            if verbose == True:
-                print('Iter %d/%d - Loss: %.2e - Noise: %.2e'
-                      % (i + 1, max_iter, loss.item(), model.likelihood.noise.item()))
+                optimizer.step()
+                i += 1
 
-            optimizer.step()
-            i += 1
-
-        if save_path is not None:
-            torch.save(model.state_dict(), save_path)
+            if save_path is not None:
+                torch.save(model.state_dict(), save_path)
+            
+            self.models = models
+            self.likelihoods = likelihoods
         
-        self.model = model
-        self.likelihood = likelihood
+        else:
+            models = []
+            likelihoods = []
+            for i in range(self.r):
+                likelihood = copy.deepcopy(self.likelihood)
+                mean = copy.deepcopy(self.mean)
+                kernel = copy.deepcopy(self.kernel)
+                model = ExactGPModel(P0_torch, Vr_torch[:,i], likelihood, mean, kernel)
+                
+                model.train()
+                likelihood.train()
+            
+                # Use the adam optimizer
+                # Includes GaussianLikelihood parameters
+                optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+
+                # "Loss" for GPs - the marginal log likelihood
+                mll = ExactMarginalLogLikelihood(likelihood, model)
+                loss_old = 1e10
+                e = 1e10
+                j = 0
+                while (e > rel_error) and (j < max_iter):
+                    optimizer.zero_grad()
+                    output = model(P0_torch)
+                    loss = -mll(output, Vr_torch[:,i])
+                    loss.backward()
+                    e = torch.abs(loss - loss_old).item()
+                    loss_old = loss
+                    if verbose == True:
+                        noise_avg = np.mean(model.likelihood.noise.detach().numpy())
+                        print(f'Iter {j+1:d}/{max_iter:d} - Mode: {i+1:d}/{self.r:d} - Loss: {loss.item():.2e} - ' \
+                        f'Mean noise: {noise_avg:.2e}')
+
+                    optimizer.step()
+                    j += 1
+
+                models.append(model)
+                likelihoods.append(likelihood)
+
+            self.models = models
+            self.likelihoods = likelihoods
         
-        A_pred, Sigma_dev = self.predict(xs)
-        
-        return A_pred, Sigma_dev
+        return models, likelihoods
     
     def predict(self, xs):
         '''
@@ -339,28 +457,45 @@ class GPR(sps.ROM):
 
         '''
         
-        if hasattr(self, 'model'):
-            # Set into eval mode
-            self.model.eval()
-            self.likelihood.eval()
-
+        if hasattr(self, 'models'):
             if xs.ndim < 2:
                 xs = xs[np.newaxis, :]
-            
+
             n_p = xs.shape[0]
-            
+
             xs0 = np.zeros_like(xs)
             for i in range(xs.shape[1]):
                 xs0[:,i] = (xs[:,i] - self.P_cnt[0,i]) / self.P_scl[0,i]
             
             xs0_torch = torch.from_numpy(xs0).contiguous().float()
-            observed_pred = self.model(xs0_torch)
-            V_pred = observed_pred.mean.detach().numpy()
             
-            V_cov = observed_pred.lazy_covariance_matrix
-            SigmaV_dev = np.sqrt(V_cov.diag().detach().numpy())
-            SigmaV_dev = SigmaV_dev.reshape((n_p, self.r))
+            if self.gpr_type == 'MultiTask':
             
+                # Set into eval mode
+                self.models[0].eval()
+                self.likelihoods[0].eval()
+
+                observed_pred = self.models[0](xs0_torch)
+                V_pred = observed_pred.mean.detach().numpy()
+                
+                V_cov = observed_pred.lazy_covariance_matrix
+                SigmaV_dev = np.sqrt(V_cov.diag().detach().numpy())
+                SigmaV_dev = SigmaV_dev.reshape((n_p, self.r))
+
+            else:
+                V_pred = np.zeros((n_p, self.r))
+                SigmaV_dev = np.zeros((n_p, self.r))
+
+                for i in range(self.r):
+                    # Set into eval mode
+                    self.models[i].eval()
+                    self.likelihoods[i].eval()
+
+                    observed_pred = self.models[i](xs0_torch)
+                    V_pred[:,i] = observed_pred.mean.detach().numpy()
+                    
+                    V_cov = observed_pred.lazy_covariance_matrix
+                    SigmaV_dev[:,i] = V_cov.diag().detach().numpy()
         else:
             raise AttributeError('The function fit_predict has to be called '\
                                   'before calling predict.')
@@ -397,6 +532,7 @@ if __name__ == '__main__':
     import matplotlib as mpl
     import matplotlib.pyplot as plt
     import matplotlib.tri as tri
+
 
     # Replace this with the path where you saved the data directory
     path = '../data/ROM/'
@@ -500,7 +636,7 @@ if __name__ == '__main__':
         height = axs[1].get_position().bounds[3]
         
         cb_ax = fig.add_axes([0.9, start, 0.05, height])
-        cmap = mpl.cm.get_cmap(cmap_name, n_levels)
+        cmap = mpl.colormaps[cmap_name]
         norm = mpl.colors.Normalize(vmin=z_min, vmax=z_max)
         
         fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cb_ax, 
@@ -509,11 +645,29 @@ if __name__ == '__main__':
         plt.show()
     #------------------------------------GPR ROM--------------------------------------------------
     # Create the gpr object
-    gpr = GPR(X_train, n_features, xyz, P_train)
+    noise = torch.from_numpy(1e-3*np.ones(P_train.shape[0])).float()
+    likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(noise=noise)
+    n_modes = 10
+    # likelihood = gpytorch.likelihoods.GaussianLikelihood()
+    kernel = gpytorch.kernels.MaternKernel(ard_dims=n_modes)
+    mean = gpytorch.means.ZeroMean()
+    gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='SingleTask', likelihood=likelihood,
+              mean=mean, kernel=kernel)
+    # gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='SingleTask')
+    
+    # kernel = gpytorch.kernels.MaternKernel(ard_dims=n_modes, batch_shape=torch.Size([n_modes]))
+    # mean = gpytorch.means.ZeroMean(batch_shape=torch.Size([n_modes]))
+    # gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='MultiTask',
+    #           mean=mean, kernel=kernel)
+    
+    # gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='MultiTask')
 
     # Calculates the POD coefficients ap and the uncertainty for the test simulations
-    Ap, Sigmap = gpr.fit_predict(P_test, decomp_type='CPOD', verbose=True)
-
+    gpr.fit(verbose=False, rel_error=1e-3)
+    Ap, Sigmap = gpr.predict(P_test)
+    # Ap, Sigmap = gpr.fit_predict(P_test, decomp_type='POD', likelihood=likelihood, verbose=True)
+    # Ap, Sigmap = gpr.fit_predict(P_test, decomp_type='POD', verbose=True)
+    
     # Reconstruct the high-dimensional state from the POD coefficients
     Xp = gpr.reconstruct(Ap)
 
