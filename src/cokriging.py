@@ -62,6 +62,9 @@ class CoKriging():
         U_hf, Sigma_hf, V_hf = np.linalg.svd(X0_hf, full_matrices=False) # SVD to find the HF and LF decomposition
         U_lf, Sigma_lf, V_lf = np.linalg.svd(X0_lf, full_matrices=False)
 
+        self.Sigma_hf = Sigma_hf
+        self.Sigma_lf = Sigma_lf
+
         Z_hf = np.diag(Sigma_hf) @ V_hf # Calculate the scores
         Z_lf = np.diag(Sigma_lf) @ V_lf
 
