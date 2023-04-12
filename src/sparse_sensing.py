@@ -12,9 +12,8 @@ MODULE: sparse_sensing.py
 
 import numpy as np
 import scipy.linalg as la
-from scipy.stats import qmc, kurtosis
 import cvxpy as cp
-
+from scipy.stats import qmc, kurtosis
 
 class ROM():
     '''
@@ -325,6 +324,9 @@ class ROM():
             for r in range(exp_variance.size):
                 if exp_variance[r] > n_modes:
                     break
+            if n_modes == 100:
+                r = A.shape[1]
+                
         elif select_modes == 'number':
             if not type(n_modes) is int:
                 raise TypeError('The parameter n_modes is not an integer.')

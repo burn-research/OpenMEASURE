@@ -1,6 +1,6 @@
 
 '''
-MODULE: gpr.py
+MODULE: cokriging.py
 @Authors:
     A. Procacci [1]
     [1]: Université Libre de Bruxelles, Aero-Thermo-Mechanics Laboratory, Bruxelles, Belgium
@@ -52,7 +52,7 @@ class CoKriging():
             Y_train_lf_u''')
             exit()
 
-    def manifold_alignment(self):
+    def manifold_alignment(self, select_modes='variance', n_modes_hf=99, n_modes_lf=99):
         self.rom_hf = sps.ROM(self.Y_train_hf_l, self.n_features, self.xyz_hf)   # Create ROM object for scaling
         self.rom_lf = sps.ROM(np.concatenate((self.Y_train_lf_l, self.Y_train_lf_u), axis=1), self.n_features, self.xyz_lf)
 
@@ -68,26 +68,46 @@ class CoKriging():
         Z_hf = np.diag(Sigma_hf) @ V_hf # Calculate the scores
         Z_lf = np.diag(Sigma_lf) @ V_lf
 
-        Z_lf_l = Z_lf[:, :self.n_linked]  # Split in linked and unlinked
-        Z_lf_u = Z_lf[:, self.n_linked:]
+        # Reduction of dimensionality
+        exp_variance_hf = 100*np.cumsum(Sigma_hf**2)/np.sum(Sigma_hf**2)
+        exp_variance_lf = 100*np.cumsum(Sigma_lf**2)/np.sum(Sigma_lf**2)
 
-        Z0_hf = np.zeros_like(Z_hf)  # Center the scores
-        for i in range(Z0_hf.shape[0]):
-            Z0_hf[i,:] = Z_hf[i,:] - np.mean(Z_hf[i,:])
-        
-        Z0_lf_l = np.zeros_like(Z_lf_l)
-        for i in range(Z0_lf_l.shape[0]):
-            Z0_lf_l[i,:] = Z_lf_l[i,:] - np.mean(Z_lf_l[i,:])
-        
-        U, Sigma, V_t = np.linalg.svd(Z0_lf_l @ Z0_hf.T, full_matrices=False)  # Compute the SVD for the procrustes projection
-        s = np.sum(Sigma)/np.trace(Z0_lf_l @ Z0_lf_l.T)
-        Q = np.transpose(V_t) @ U.T
-        Z_aligned = s * Q @ Z_lf  # Compute the aligned LF scores
+        Ur_hf, Zr_hf_t = self.rom_hf.reduction(U_hf, Z_hf.T, exp_variance_hf, select_modes, n_modes_hf)
+        Ur_lf, Zr_lf_t = self.rom_lf.reduction(U_lf, Z_lf.T, exp_variance_lf, select_modes, n_modes_lf)
 
-        self.n_latent = Z_aligned.shape[0]
-        self.Z_aligned = Z_aligned
-        self.U_hf = U_hf
-        self.Z_hf = Z_hf
+        Zr_hf = Zr_hf_t.T
+        Zr_lf = Zr_lf_t.T
+
+        self.r_hf = Ur_hf.shape[1]
+        self.r_lf = Ur_lf.shape[1]
+
+        print(self.r_hf)
+        print(self.r_lf)
+
+        if self.r_lf < self.r_hf:
+            padding = np.zeros((self.r_hf-self.r_lf, Zr_lf.shape[1]))
+            Zr_lf = np.concatenate([Zr_lf, padding], axis=0)
+
+        Zr_lf_l = Zr_lf[:, :self.n_linked]  # Split in linked and unlinked
+        Zr_lf_u = Zr_lf[:, self.n_linked:]
+
+        Z0r_hf = np.zeros_like(Zr_hf)  # Center the scores
+        for i in range(Z0r_hf.shape[0]):
+            Z0r_hf[i,:] = Zr_hf[i,:] - np.mean(Zr_hf[i,:])
+        
+        Z0r_lf_l = np.zeros_like(Zr_lf_l)
+        for i in range(Z0r_lf_l.shape[0]):
+            Z0r_lf_l[i,:] = Zr_lf_l[i,:] - np.mean(Zr_lf_l[i,:])
+        
+        Ur, Sigmar, Vr_t = np.linalg.svd(Z0r_lf_l @ Z0r_hf.T, full_matrices=False)  # Compute the SVD for the procrustes projection
+        sr = np.sum(Sigmar)/np.trace(Z0r_lf_l @ Z0r_lf_l.T)
+        Qr = np.transpose(Vr_t) @ Ur.T
+        Zr_aligned = sr * Qr @ Zr_lf  # Compute the aligned LF scores
+
+        self.n_latent = Zr_aligned.shape[0]
+        self.Zr_aligned = Zr_aligned
+        self.Ur_hf = Ur_hf
+        self.Zr_hf = Zr_hf
 
     def fit(self):
         X_train = np.concatenate((self.X_train_u, self.X_train_l), axis=0)
@@ -98,7 +118,7 @@ class CoKriging():
             self.model_list.append(MultiFiCoKriging(regr=self.regr_type, rho_regr=self.rho_regr, theta=self.theta,
                                                theta0=self.theta0, thetaL=self.thetaL, thetaU=self.thetaU, normalize=self.normalize))
             # Fit the list of models
-            self.model_list[k].fit([X_train , self.X_train_l], [self.Z_aligned[k,:], self.Z_hf[k,:]], 
+            self.model_list[k].fit([X_train , self.X_train_l], [self.Zr_aligned[k,:], self.Zr_hf[k,:]], 
                               initial_range=self.initial_range, tol=self.tol)
         
 
@@ -115,8 +135,8 @@ class CoKriging():
             Z_pred[i,:] = self.model_list[i].predict(X_test)[0].flatten()  # Compute the prediction in the latent space
             Z_mse[i,:] = self.model_list[i].predict(X_test)[1].flatten()  # Compute the MSE (?) of the prediction
 
-        Y0_pred = self.U_hf @ Z_pred # Project in the original space
-        Y0_mse = self.U_hf @ Z_mse 
+        Y0_pred = self.Ur_hf @ Z_pred # Project in the original space
+        Y0_mse = self.Ur_hf @ Z_mse 
         
         Y_pred = np.empty_like(Y0_pred)
         Y_mse = np.empty_like(Y0_mse)
@@ -175,7 +195,7 @@ if __name__ == '__main__':
 
     cokriging = CoKriging(X_train_l, X_train_u, Y_train_lf_l, Y_train_lf_u, Y_train_hf_l,
                           xyzi_lf, xyzi_hf, n_features)
-    cokriging.manifold_alignment()
+    cokriging.manifold_alignment(select_modes='variance', n_modes_hf=99.9, n_modes_lf=99)
     cokriging.fit()
     
     Y_pred, Y_mse = cokriging.predict(test_par)
