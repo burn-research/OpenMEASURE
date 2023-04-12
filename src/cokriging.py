@@ -81,9 +81,6 @@ class CoKriging():
         self.r_hf = Ur_hf.shape[1]
         self.r_lf = Ur_lf.shape[1]
 
-        print(self.r_hf)
-        print(self.r_lf)
-
         if self.r_lf < self.r_hf:
             padding = np.zeros((self.r_hf-self.r_lf, Zr_lf.shape[1]))
             Zr_lf = np.concatenate([Zr_lf, padding], axis=0)
