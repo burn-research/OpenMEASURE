@@ -478,13 +478,13 @@ class GPR(sps.ROM):
                 observed_pred = self.models[0](xs0_torch)
                 V_pred = observed_pred.mean.detach().numpy()
                 
-                V_cov = observed_pred.lazy_covariance_matrix
-                SigmaV_dev = np.sqrt(V_cov.diag().detach().numpy())
-                SigmaV_dev = SigmaV_dev.reshape((n_p, self.r))
+                V_cov = observed_pred.lazy_covariance_matrix # covariance matrix
+                V_sigma = np.sqrt(V_cov.diag().detach().numpy()) # standard deviation of prediction
+                V_sigma = V_sigma.reshape((n_p, self.r))
 
             else:
                 V_pred = np.zeros((n_p, self.r))
-                SigmaV_dev = np.zeros((n_p, self.r))
+                V_sigma = np.zeros((n_p, self.r))
 
                 for i in range(self.r):
                     # Set into eval mode
@@ -494,14 +494,14 @@ class GPR(sps.ROM):
                     observed_pred = self.models[i](xs0_torch)
                     V_pred[:,i] = observed_pred.mean.detach().numpy()
                     
-                    V_cov = observed_pred.lazy_covariance_matrix
-                    SigmaV_dev[:,i] = V_cov.diag().detach().numpy()
+                    V_cov = observed_pred.lazy_covariance_matrix # covariance matrix
+                    V_sigma[:,i] = np.sqrt(V_cov.diag().detach().numpy()) # standard deviation of prediction
         else:
             raise AttributeError('The function fit_predict has to be called '\
                                   'before calling predict.')
         A_pred = self.Sigma_r * V_pred
-        Sigma_dev = self.Sigma_r * SigmaV_dev
-        return A_pred, Sigma_dev
+        A_sigma = self.Sigma_r * V_sigma
+        return A_pred, A_sigma
 
     def reconstruct(self, Ar):
         '''
@@ -615,7 +615,7 @@ if __name__ == '__main__':
        
         n_levels = 12
         levels = np.linspace(z_min, z_max, n_levels)
-        cmap_name= 'inferno'
+        cmap_name = 'inferno'
         titles=['Original CFD','Predicted']
         
         for i, ax in enumerate(axs):
@@ -636,7 +636,7 @@ if __name__ == '__main__':
         height = axs[1].get_position().bounds[3]
         
         cb_ax = fig.add_axes([0.9, start, 0.05, height])
-        cmap = mpl.colormaps[cmap_name]
+        cmap = mpl.cm.get_cmap(cmap_name)
         norm = mpl.colors.Normalize(vmin=z_min, vmax=z_max)
         
         fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cb_ax, 
@@ -651,7 +651,7 @@ if __name__ == '__main__':
     # likelihood = gpytorch.likelihoods.GaussianLikelihood()
     kernel = gpytorch.kernels.MaternKernel(ard_dims=n_modes)
     mean = gpytorch.means.ZeroMean()
-    gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='SingleTask', likelihood=likelihood,
+    gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='MultiTask', likelihood=likelihood,
               mean=mean, kernel=kernel)
     # gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='SingleTask')
     
@@ -665,6 +665,7 @@ if __name__ == '__main__':
     # Calculates the POD coefficients ap and the uncertainty for the test simulations
     gpr.fit(verbose=False, rel_error=1e-3)
     Ap, Sigmap = gpr.predict(P_test)
+    print(Sigmap)
     # Ap, Sigmap = gpr.fit_predict(P_test, decomp_type='POD', likelihood=likelihood, verbose=True)
     # Ap, Sigmap = gpr.fit_predict(P_test, decomp_type='POD', verbose=True)
     
