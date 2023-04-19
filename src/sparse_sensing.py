@@ -339,6 +339,7 @@ class ROM():
         # Reduce the dimensionality
         Ur = U[:, :r]
         Ar = A[:, :r]
+        self.r = r
 
         return Ur, Ar
 
@@ -678,7 +679,7 @@ class SPR(ROM):
         
         return C
 
-    def fit_predict(self, C, y, scale_type='std', decomp_type='POD', select_modes='variance', 
+    def fit(self, C, scale_type='std', decomp_type='POD', select_modes='variance', 
                     n_modes=99, method='OLS', solver='ECOS', abstol=1e-3, cond=False,
                     verbose=False):
         '''
@@ -689,11 +690,6 @@ class SPR(ROM):
         ----------
         C : numpy array
             The measurement matrix, size (s,n).
-        
-        y : numpy array
-            The measurement vector, size (s,3). The first column contains
-            the measurements, the second column contains the uncertainty (std deviation), 
-            and the third column contains which feature is measured.
         
         scale_type : str, optional
             Type of scaling method. The default is 'std'. Standard scaling is the 
@@ -729,33 +725,16 @@ class SPR(ROM):
             If True, it displays the output from the constrained optimiziation 
             solver. The default is False
 
-        Returns
-        -------
-        
-        ar : numpy array
-            The low-dimensional projection of the state of the system, size (r,)
-        
-        x_rec : numpy array
-            The predicted state of the system, size (n,).
-
         '''
-        if C.shape[0] != y.shape[0]:
-            raise ValueError('The number of rows of C does not match the number' \
-                             ' of rows of y.')
         if C.shape[1] != self.X.shape[0]:
             raise ValueError('The number of columns of C does not match the number' \
                               ' of rows of X.')
-        if y.ndim < 2:
-            raise ValueError('The y array has the wrong number of columns. y has' \
-                              ' to have dimensions (s,3).')
-        if y.shape[1] != 3:
-            raise ValueError('The y array has the wrong number of columns. y has' \
-                              ' to have dimensions (s,3).')
         
         self.scale_type = scale_type
+        self.C = C
         X0 = SPR.scale_data(self, scale_type)
-        Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, select_modes, n_modes, solver, abstol, verbose)
-        # Ur, Ar = SPR.reduction(U, A, exp_variance, select_modes, n_modes)
+        Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, select_modes, 
+                                                   n_modes, solver, abstol, verbose)
         self.Ur = Ur
         
         Theta = C @ Ur
@@ -776,13 +755,10 @@ class SPR(ROM):
                 U_theta, S_theta, V_thetat = np.linalg.svd(Theta_pinv)
                 self.k = S_theta[0]/S_theta[-1]
             
-        ar, x_rec = SPR.predict(self, y)
-        return ar, x_rec
-    
     def predict(self, y):
         '''
         Return the prediction vector. 
-        This method has to be used after fit_predict.
+        This method has to be used after fit().
 
         Parameters
         ----------
@@ -795,23 +771,33 @@ class SPR(ROM):
         -------
         ar : numpy array
             The low-dimensional projection of the state of the system, size (r,)
-        x_rec : numpy array
-            The reconstructed error, size (n,).
+        ar_sigma : numpy array
+            The uncertainty (standard deviation) of the projection, size (r,).
 
         '''
+        if self.C.shape[0] != y.shape[0]:
+            raise ValueError('The number of rows of C does not match the number' \
+                             ' of rows of y.')
+        
+        if y.shape[1] != 3:
+            raise ValueError('The y array has the wrong number of columns. y has' \
+                              ' to have dimensions (s,3).')
+        
         if hasattr(self, 'Theta'):
             y0 = SPR.scale_vector(self, y)
             
             if not np.any(y[:,1]):
                 W = np.eye(y.shape[0])
+                ar_sigma = np.zeros((self.r, ))
             else:
-                W = np.diag(1/y0[:,1])  #Weights used for the weighted OLS and COLS
-            
+                W = np.diag(1/y0[:,1])  # Weights used for the weighted OLS and COLS
+                Theta_pinv = np.linalg.pinv(self.Theta)
+                ar_sigma = np.abs(np.dot(Theta_pinv, y0[:,1]))
+
             if self.method == 'OLS':
-                
-                ar, res, rank, s = la.lstsq(W @ self.Theta, W @ y0[:,0])
-                x0_rec = self.Ur @ ar
-        
+                Theta_pinv = np.linalg.pinv(W @ self.Theta)
+                ar = np.dot(Theta_pinv, W @ y0[:,0])
+
             elif self.method == 'COLS':
                 r = self.Theta.shape[1]
                 g = cp.Variable(r)
@@ -819,26 +805,44 @@ class SPR(ROM):
                 x0_tilde = self.Ur @ g
                 x_tilde = SPR.unscale_data(self, x0_tilde)
                 
-                objective = cp.Minimize(cp.pnorm(W @ (y0[:,0] - self.Theta @ g), p=2))
+                # objective = cp.Minimize(cp.pnorm(W @ (y0[:,0] - self.Theta @ g), p=2))
+                objective = cp.Minimize(cp.sum_squares(W @ (y0[:,0] - self.Theta @ g)))
                 constrs = [x_tilde >= 0]
                 prob = cp.Problem(objective, constrs)
                 min_value = prob.solve(solver=self.solver, abstol=self.abstol, 
                                         verbose=self.verbose)
                 ar = g.value
-                x0_rec = self.Ur @ ar
-            
+                
             else:
                 raise NotImplementedError('The prediction method selected has not been '\
                                           'implemented yet')
             
-        
-            x_rec = SPR.unscale_data(self, x0_rec)
         else:
             raise AttributeError('The function fit_predict has to be called '\
                                  'before calling predict.')
             
-        return ar, x_rec
+        return ar, ar_sigma
 
+    def reconstruct(self, ar):
+        '''
+        Return the reconstructed vector. 
+
+        Parameters
+        ----------
+        ar : numpy array
+            The measurement vector, size (r,). 
+
+        Returns
+        -------
+        x_rec : numpy array
+            The reconstructed error, size (n,).
+
+        '''
+
+        x0_rec = self.Ur @ ar 
+        x_rec = SPR.unscale_data(self, x0_rec)
+
+        return x_rec
 
 if __name__ == '__main__':  
     import matplotlib as mpl
@@ -981,8 +985,9 @@ if __name__ == '__main__':
 
     
     # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
-    ap, xp = spr.fit_predict(C_qr, y_qr, decomp_type='CPOD', verbose=True, select_modes='number',
-                             n_modes=14)
+    spr.fit(C_qr, decomp_type='POD', verbose=True, select_modes='number', n_modes=14)
+    ap, ap_sigma = spr.predict(y_qr)
+    xp = spr.reconstruct(ap)
 
     # Select the feature to plot
     str_ind = 'T'

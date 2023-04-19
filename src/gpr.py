@@ -276,7 +276,7 @@ class GPR(sps.ROM):
         return P0    
 
     def fit(self, scaleX_type='std', scaleP_type='std', select_modes='variance', decomp_type='POD', 
-            n_modes=99, max_iter=1000, solver='ECOS', abstol=1e-3, rel_error=1e-5, verbose=False, 
+            n_modes=99, max_iter=1000, rel_error=1e-5, lr=0.1, solver='ECOS', abstol=1e-3, verbose=False, 
             save_path=None):
         '''
         Fit the GPR model.
@@ -309,7 +309,19 @@ class GPR(sps.ROM):
         rel_error : float, optional
             Minimum relative error below which the training of hyperparameters is
             stopped. The default is 1e-5.
-            
+        
+        lr : float, optional
+            Learning rate of the Adam optimizer used for minimizing the negative log 
+            likelihood. The default is 0.1.
+
+        solver : str, optional
+            Type of solver to use for solving the constrained minimization problem.
+            Refer to the cvxpy documentation. The default is 'ECOS'.
+
+        abstol : float, optional
+            Absolute accuracy for the constrained solver used for CPOD. 
+            Default is 1e-3.
+
         verbose : bool, optional
             If True, it will print informations on the training of the hyperparameters.
             The default is False.
