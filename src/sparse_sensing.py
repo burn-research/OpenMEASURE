@@ -281,8 +281,6 @@ class ROM():
             raise NotImplementedError('The decomposition method selected has not been '\
                                       'implemented yet')
                 
-        
-
     def reduction(self, U, A, exp_variance, select_modes, n_modes):
         '''
         Return the reduced taylored basis.
@@ -342,6 +340,33 @@ class ROM():
         self.r = r
 
         return Ur, Ar
+
+    def reconstruct(self, Ar):
+        '''
+        Reconstruct the X matrix from the low-dimensional representation.
+
+        Parameters
+        ----------
+        Ar : numpy array
+            The matrix containing the low-dimensional coefficients, size (n_p,r).
+
+        Returns
+        -------
+        X_rec : numpy array
+            The high-dimensional representation of the state of the system, size (n,n_p)
+            
+        '''
+        if Ar.ndim < 2:
+                Ar = Ar[np.newaxis, :]
+
+        n_p = Ar.shape[0]
+        n = self.Ur.shape[0]
+        X_rec = np.zeros((n, n_p))
+        for i in range(n_p):
+            x0_rec = self.Ur @ Ar[i,:]
+            X_rec[:,i] = self.unscale_data(x0_rec)
+
+        return X_rec
 
     def adaptive_sampling(self, P, scale_type='std'):
         '''
@@ -679,7 +704,7 @@ class SPR(ROM):
         
         return C
 
-    def fit(self, C, scale_type='std', decomp_type='POD', select_modes='variance', 
+    def fit(self, C, is_Theta=False, scale_type='std', decomp_type='POD', select_modes='variance', 
                     n_modes=99, method='OLS', solver='ECOS', abstol=1e-3, cond=False,
                     verbose=False):
         '''
@@ -689,7 +714,11 @@ class SPR(ROM):
         Parameters
         ----------
         C : numpy array
-            The measurement matrix, size (s,n).
+            The measurement matrix, size (s,n), or the Theta matrix (C @ Uq), size (s,q), 
+            if the flag is_Theta is true.
+
+        is_Theta: bool, optional
+            If True, C is assumed to be Theta. The default is False.
         
         scale_type : str, optional
             Type of scaling method. The default is 'std'. Standard scaling is the 
@@ -726,18 +755,26 @@ class SPR(ROM):
             solver. The default is False
 
         '''
-        if C.shape[1] != self.X.shape[0]:
+        if (C.shape[1] != self.X.shape[0]) and not is_Theta:
             raise ValueError('The number of columns of C does not match the number' \
                               ' of rows of X.')
         
         self.scale_type = scale_type
-        self.C = C
         X0 = SPR.scale_data(self, scale_type)
         Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, select_modes, 
                                                    n_modes, solver, abstol, verbose)
         self.Ur = Ur
-        
-        Theta = C @ Ur
+
+        if not is_Theta:
+            self.C = C
+            Theta = C @ Ur
+        else:
+            Theta = C
+
+        if (Theta.shape[1] != Ur.shape[1]):
+            raise ValueError('The number of columns of Theta does not match the number' \
+                              ' of columns of Ur.')
+
         self.Theta = Theta
         self.method = method
         self.solver = solver
@@ -775,8 +812,8 @@ class SPR(ROM):
             The uncertainty (standard deviation) of the projection, size (r,).
 
         '''
-        if self.C.shape[0] != y.shape[0]:
-            raise ValueError('The number of rows of C does not match the number' \
+        if self.Theta.shape[0] != y.shape[0]:
+            raise ValueError('The number of rows of Theta does not match the number' \
                              ' of rows of y.')
         
         if y.shape[1] != 3:
@@ -784,14 +821,14 @@ class SPR(ROM):
                               ' to have dimensions (s,3).')
         
         if hasattr(self, 'Theta'):
-            y0 = SPR.scale_vector(self, y)
+            y0 = self.scale_vector(y)
             
             if not np.any(y[:,1]):
                 W = np.eye(y.shape[0])
                 ar_sigma = np.zeros((self.r, ))
             else:
                 W = np.diag(1/y0[:,1])  # Weights used for the weighted OLS and COLS
-                Theta_pinv = np.linalg.pinv(self.Theta)
+                Theta_pinv = np.linalg.pinv(W @ self.Theta)
                 ar_sigma = np.abs(np.dot(Theta_pinv, y0[:,1]))
 
             if self.method == 'OLS':
@@ -803,11 +840,12 @@ class SPR(ROM):
                 g = cp.Variable(r)
                 
                 x0_tilde = self.Ur @ g
-                x_tilde = SPR.unscale_data(self, x0_tilde)
                 
-                # objective = cp.Minimize(cp.pnorm(W @ (y0[:,0] - self.Theta @ g), p=2))
+                zero = np.zeros_like(x0_tilde)
+                zero_scl = (zero - self.X_cnt[:,0])/self.X_scl[:,0]
+                
                 objective = cp.Minimize(cp.sum_squares(W @ (y0[:,0] - self.Theta @ g)))
-                constrs = [x_tilde >= 0]
+                constrs = [x0_tilde >= zero_scl]
                 prob = cp.Problem(objective, constrs)
                 min_value = prob.solve(solver=self.solver, abstol=self.abstol, 
                                         verbose=self.verbose)
@@ -818,31 +856,10 @@ class SPR(ROM):
                                           'implemented yet')
             
         else:
-            raise AttributeError('The function fit_predict has to be called '\
+            raise AttributeError('The function fit has to be called '\
                                  'before calling predict.')
             
         return ar, ar_sigma
-
-    def reconstruct(self, ar):
-        '''
-        Return the reconstructed vector. 
-
-        Parameters
-        ----------
-        ar : numpy array
-            The measurement vector, size (r,). 
-
-        Returns
-        -------
-        x_rec : numpy array
-            The reconstructed error, size (n,).
-
-        '''
-
-        x0_rec = self.Ur @ ar 
-        x_rec = SPR.unscale_data(self, x0_rec)
-
-        return x_rec
 
 if __name__ == '__main__':  
     import matplotlib as mpl
@@ -985,14 +1002,14 @@ if __name__ == '__main__':
 
     
     # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
-    spr.fit(C_qr, decomp_type='POD', verbose=True, select_modes='number', n_modes=14)
+    spr.fit(C_qr, decomp_type='POD', verbose=True, select_modes='number', n_modes=14, method='COLS')
     ap, ap_sigma = spr.predict(y_qr)
-    xp = spr.reconstruct(ap)
+    xp = spr.reconstruct(ap[np.newaxis, :])
 
     # Select the feature to plot
-    str_ind = 'T'
+    str_ind = 'OH'
     ind = features.index(str_ind)
 
     plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_cells:(ind+1)*n_cells, 3], 
-                    xp[ind*n_cells:(ind+1)*n_cells]], cbar_label=str_ind)
+                    xp[ind*n_cells:(ind+1)*n_cells, 0]], cbar_label=str_ind)
   

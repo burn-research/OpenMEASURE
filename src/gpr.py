@@ -157,19 +157,21 @@ class GPR(sps.ROM):
         
     Methods
     ----------
-    scale_coefficients(A, scale_type)
-        Scales the coefficients used for training the GPR model.
+    scale_GPR_data(P, scale_type)
+        Scales the input parameters.
         
     unscale_coefficients(scale_type)
         Unscale the coefficients.
     
-    fit_predict(xs, scale_type='std', select_modes='variance', 
-                n_modes=99)
-        Trains the GPR model, then predicts ar and reconstructs x.
+    fit(scaleX_type='std', scaleP_type='std', select_modes='variance', decomp_type='POD', 
+            n_modes=99, max_iter=1000, rel_error=1e-5, lr=0.1, solver='ECOS', abstol=1e-3, verbose=False)
+        Trains the GPR model.
     
-    predict(xs, scale_type='std'):
-        Predicts ar and reconstructs x.
-    
+    predict(P_star)
+        Predicts the low-dimensional array of vectors Ar and its uncertainty Ar_sigma.
+
+    update(P_new, A_new, A_sigma_new=None, retrain=False, verbose=False)
+        Updates the model with new data.
     '''
 
     def __init__(self, X, n_features, xyz, P, gpr_type='SingleTask', likelihood=None, 
@@ -178,6 +180,11 @@ class GPR(sps.ROM):
         self.P = P
         self.gpr_type = gpr_type
         
+        if P.shape[0] != X.shape[1]:
+            raise Exception(f'The number of parameters ({P.shape[0]}) is different' \
+                            f' from the number of columns of X ({X.shape[1]})')
+            exit()
+
         if likelihood is None:
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
         else:
@@ -190,6 +197,39 @@ class GPR(sps.ROM):
             self.mean = gpytorch.means.ConstantMean()
         else:
             self.mean = mean
+
+    def _train(self, model, likelihood, P0_torch, Vr_torch, i):
+        model.train()
+        likelihood.train()
+    
+        optimizer = torch.optim.Adam(model.parameters(), lr=self.lr)
+
+        mll = ExactMarginalLogLikelihood(likelihood, model)
+        loss_old = 1e10
+        e = 1e10
+        j = 0
+        while (e > self.rel_error) and (j < self.max_iter):
+            optimizer.zero_grad()
+            output = model(P0_torch)
+            loss = -mll(output, Vr_torch)
+            loss.backward()
+            e = torch.abs(loss - loss_old).item()
+            loss_old = loss
+            if self.verbose == True:
+                if self.gpr_type == 'SingleTask':
+                    noise_avg = np.mean(model.likelihood.noise.detach().numpy())
+                    print(f'Iter {j+1:d}/{self.max_iter:d} - Mode: {i+1:d}/{self.r:d} - Loss: {loss.item():.2e} - ' \
+                    f'Mean noise: {noise_avg:.2e}')
+                else:
+                    print(f'Iter {j+1:d}/{self.max_iter:d} - Loss: {loss.item():.2e} - ' \
+                         f'Noise: {model.likelihood.noise.item():.2e}')
+                    
+            optimizer.step()
+            j += 1
+
+        Vr_sigma = output.stddev.detach().numpy()
+        
+        return model, likelihood, Vr_sigma
 
     def scale_GPR_data(self, P, scale_type):
         '''
@@ -275,24 +315,24 @@ class GPR(sps.ROM):
         P0 = (P - P_cnt)/P_scl
         return P0    
 
-    def fit(self, scaleX_type='std', scaleP_type='std', select_modes='variance', decomp_type='POD', 
-            n_modes=99, max_iter=1000, rel_error=1e-5, lr=0.1, solver='ECOS', abstol=1e-3, verbose=False, 
-            save_path=None):
+    def fit(self, scaleX_type='std', scaleP_type='std', decomp_type='POD', select_modes='variance', 
+            n_modes=99, max_iter=1000, rel_error=1e-5, lr=0.1, solver='ECOS', abstol=1e-3, verbose=False):
         '''
         Fit the GPR model.
-        Return the prediction vector.
+        Return the model and likelihood.
 
         Parameters
         ----------
-        xs : numpy array
-            The set of design features to evaluate the prediction, size (n_p,d).
-            
         scaleX_type : str, optional
             Type of scaling method for the data matrix. The default is 'std'.
         
         scaleP_type : str, optional
             Type of scaling method for the parameters. The default is 'std'.
         
+        decomp_type : str, optional
+            Type of decomposition. The default is 'POD'. The available options
+            are 'POD' and 'CPOD'
+
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
             options are 'variance' or 'number'.
@@ -326,23 +366,29 @@ class GPR(sps.ROM):
             If True, it will print informations on the training of the hyperparameters.
             The default is False.
             
-        save_path : str, optional.
-            String containing the path where to save the model (extension .pth).
-            The default is None, and the model is not saved.
 
         Returns
         -------
-        A_pred : numpy array
-            The low-dimensional projection of the state of the system, size (n_p,q)
-            
-        Sigma_dev : numpy array
-            Uncertainty in the prediction, size (n_p,q)
+        model : gpytorch.models
+            The trained gpr model.
+
+        likelihood : gpytorch.likelihoods.
+            The trained likelihood.
         
         '''
         
         self.scaleX_type = scaleX_type
         self.scaleP_type = scaleP_type
-        
+        self.select_modes = select_modes
+        self.decomp_type = decomp_type, 
+        self.n_modes = n_modes
+        self.max_iter = max_iter
+        self.rel_error = rel_error 
+        self.lr = lr
+        self.solver = solver
+        self.abstol = abstol
+        self.verbose = verbose
+
         X0 = self.scale_data(scaleX_type)
         
         Ur, Ar, exp_variance_r = self.decomposition(X0, decomp_type, select_modes, n_modes, solver, abstol, verbose)
@@ -362,101 +408,59 @@ class GPR(sps.ROM):
         self.Sigma_r = Sigma_r
         P0 = GPR.scale_GPR_data(self, self.P, scaleP_type)
         
-        P0_torch = torch.from_numpy(P0).contiguous().float()
-        Vr_torch = torch.from_numpy(Vr).contiguous().float()
-        
+        self.P0 = P0
+        self.Vr = Vr
+
+        P0_torch = torch.from_numpy(P0).contiguous().double()
+        Vr_torch = torch.from_numpy(Vr).contiguous().double()
+            
+
         if self.gpr_type == 'MultiTask':
+
             models = []
             likelihoods = []
             likelihoods.append(MultitaskGaussianLikelihood(num_tasks=self.r))
             models.append(BatchIndipendentMultitaskGPModel(P0_torch, Vr_torch, likelihoods[0], 
                                                            self.mean, self.kernel))
-        
-            # Find optimal model hyperparameters
-            models[0].train()
-            likelihoods[0].train()
+            models[0].double()
+            likelihoods[0].double()
             
-            # Use the adam optimizer
-            # Includes GaussianLikelihood parameters
-            optimizer = torch.optim.Adam(models[0].parameters(), lr=0.1)
-
-            # "Loss" for GPs - the marginal log likelihood
-            mll = ExactMarginalLogLikelihood(likelihoods[0], models[0])
-            loss_old = 1e10
-            e = 1e10
-            i = 0
-            while (e > rel_error) and (i < max_iter):
-                optimizer.zero_grad()
-                output = models[0](P0_torch)
-                loss = -mll(output, Vr_torch)
-                loss.backward()
-                e = torch.abs(loss - loss_old).item()
-                loss_old = loss
-                if verbose == True:
-                    print(f'Iter {i+1:d}/{max_iter:d} - Loss: {loss.item():.2e} - ' \
-                         f'Noise: {models[0].likelihood.noise.item():.2e}')
-
-                optimizer.step()
-                i += 1
-
-            if save_path is not None:
-                torch.save(model.state_dict(), save_path)
-            
-            self.models = models
-            self.likelihoods = likelihoods
+            models[0], likelihoods[0], Vr_sigma = self._train(models[0], likelihoods[0], P0_torch, Vr_torch, 0)
         
         else:
+            
             models = []
             likelihoods = []
+            Vr_sigma = np.zeros_like(Vr)
+
             for i in range(self.r):
                 likelihood = copy.deepcopy(self.likelihood)
                 mean = copy.deepcopy(self.mean)
                 kernel = copy.deepcopy(self.kernel)
                 model = ExactGPModel(P0_torch, Vr_torch[:,i], likelihood, mean, kernel)
                 
-                model.train()
-                likelihood.train()
-            
-                # Use the adam optimizer
-                # Includes GaussianLikelihood parameters
-                optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+                model.double()
+                likelihood.double()
 
-                # "Loss" for GPs - the marginal log likelihood
-                mll = ExactMarginalLogLikelihood(likelihood, model)
-                loss_old = 1e10
-                e = 1e10
-                j = 0
-                while (e > rel_error) and (j < max_iter):
-                    optimizer.zero_grad()
-                    output = model(P0_torch)
-                    loss = -mll(output, Vr_torch[:,i])
-                    loss.backward()
-                    e = torch.abs(loss - loss_old).item()
-                    loss_old = loss
-                    if verbose == True:
-                        noise_avg = np.mean(model.likelihood.noise.detach().numpy())
-                        print(f'Iter {j+1:d}/{max_iter:d} - Mode: {i+1:d}/{self.r:d} - Loss: {loss.item():.2e} - ' \
-                        f'Mean noise: {noise_avg:.2e}')
-
-                    optimizer.step()
-                    j += 1
+                model, likelihood, Vr_sigma[:, i] = self._train(model, likelihood, P0_torch, Vr_torch[:,i], i)
 
                 models.append(model)
                 likelihoods.append(likelihood)
 
-            self.models = models
-            self.likelihoods = likelihoods
+        self.Vr_sigma = Vr_sigma
+        self.models = models
+        self.likelihoods = likelihoods
         
         return models, likelihoods
     
-    def predict(self, xs):
+    def predict(self, P_star):
         '''
         Return the prediction vector. 
-        This method has to be used after fit_predict.
+        This method has to be used after fit.
 
         Parameters
         ----------
-        xs : numpy array
+        P_star : numpy array
             The set of design features to evaluate the prediction, size (n_p,d).
 
         Returns
@@ -464,36 +468,33 @@ class GPR(sps.ROM):
         A_pred : numpy array
             The low-dimensional projection of the state of the system, size (n_p,r)
         
-        Sigma_dev : numpy array
+        A_sigma : numpy array
             Uncertainty in the prediction, size (n_p,r)
 
         '''
         
         if hasattr(self, 'models'):
-            if xs.ndim < 2:
-                xs = xs[np.newaxis, :]
+            if P_star.ndim < 2:
+                P_star = P_star[np.newaxis, :]
 
-            n_p = xs.shape[0]
+            n_p = P_star.shape[0]
 
-            xs0 = np.zeros_like(xs)
-            for i in range(xs.shape[1]):
-                xs0[:,i] = (xs[:,i] - self.P_cnt[0,i]) / self.P_scl[0,i]
+            P0_star = np.zeros_like(P_star)
+            for i in range(P_star.shape[1]):
+                P0_star[:,i] = (P_star[:,i] - self.P_cnt[0,i]) / self.P_scl[0,i]
             
-            xs0_torch = torch.from_numpy(xs0).contiguous().float()
+            P0_star_torch = torch.from_numpy(P0_star).contiguous().double()
             
-            if self.gpr_type == 'MultiTask':
-            
+            if self.gpr_type == 'MultiTask':    
+
                 # Set into eval mode
                 self.models[0].eval()
                 self.likelihoods[0].eval()
 
-                observed_pred = self.models[0](xs0_torch)
+                observed_pred = self.models[0](P0_star_torch)
                 V_pred = observed_pred.mean.detach().numpy()
+                V_sigma = observed_pred.stddev.detach().numpy()
                 
-                V_cov = observed_pred.lazy_covariance_matrix # covariance matrix
-                V_sigma = np.sqrt(V_cov.diag().detach().numpy()) # standard deviation of prediction
-                V_sigma = V_sigma.reshape((n_p, self.r))
-
             else:
                 V_pred = np.zeros((n_p, self.r))
                 V_sigma = np.zeros((n_p, self.r))
@@ -503,43 +504,96 @@ class GPR(sps.ROM):
                     self.models[i].eval()
                     self.likelihoods[i].eval()
 
-                    observed_pred = self.models[i](xs0_torch)
+                    observed_pred = self.models[i](P0_star_torch)
                     V_pred[:,i] = observed_pred.mean.detach().numpy()
+                    V_sigma[:,i] = observed_pred.stddev.detach().numpy()
                     
-                    V_cov = observed_pred.lazy_covariance_matrix # covariance matrix
-                    V_sigma[:,i] = np.sqrt(V_cov.diag().detach().numpy()) # standard deviation of prediction
         else:
-            raise AttributeError('The function fit_predict has to be called '\
+            raise AttributeError('The function fit has to be called '\
                                   'before calling predict.')
-        A_pred = self.Sigma_r * V_pred
-        A_sigma = self.Sigma_r * V_sigma
+        
+        A_pred = np.zeros_like(V_pred)
+        A_sigma = np.zeros_like(V_sigma)
+        for i in range(self.r):
+            A_pred[:,i] = self.Sigma_r[i] * V_pred[:,i]
+            A_sigma[:,i] = self.Sigma_r[i] * V_sigma[:,i]
+        
         return A_pred, A_sigma
-
-    def reconstruct(self, Ar):
+    
+    def update(self, P_new, A_new, A_sigma_new=None, retrain=False, verbose=False):     
         '''
-        Reconstruct the X matrix from the low-dimensional representation.
+        Updates the model with new data.
 
         Parameters
         ----------
-        Ar : numpy array
-            The matrix containing the low-dimensional coefficients, size (n_p,r).
+        P_new : numpy array
+            The set of design features of the new data, size (n_p_new, d).
 
-        Returns
-        -------
-        X_rec : numpy array
-            The high-dimensional representation of the state of the system, size (n,n_p)
-            
+        A_new : numpy array
+            The set of new data in the low dimensional space, size (n_p_new, r).
+
+        A_sigma_new : numpy array, optional
+            The uncertainty of the new data. The default is None.
+        
+        retrain : bool, optional
+            If True, the hyperparameters are retrained. The default is False.
+
+        verbose : bool, optional
+            If True, it will print informations on the training of the hyperparameters.
+            The default is False.
+
         '''
         
-        n_p = Ar.shape[0]
-        n = self.Ur.shape[0]
-        X_rec = np.zeros((n, n_p))
-        for i in range(n_p):
-            x0_rec = self.Ur @ Ar[i,:]
-            X_rec[:,i] = self.unscale_data(x0_rec)
+        self.verbose = verbose
+        
+        # Create new set of parameters
+        P0_new = np.zeros_like(P_new)
+        for i in range(P_new.shape[1]):
+            P0_new[:,i] = (P_new[:,i] - self.P_cnt[0,i]) / self.P_scl[0,i]
+            
+        P0_tot = np.concatenate([self.P0, P0_new], axis=0)
+        P0_tot_torch = torch.from_numpy(P0_tot).contiguous().double()
+        
+        # Create new set of observations
+        Vr_new = np.zeros_like(A_new)
+        for i in range(self.r):
+            # V_sigma_train[:,i] = A_sigma_train[:,i]/self.Sigma_r[i]
+            Vr_new[:,i] = A_new[:,i]/self.Sigma_r[i]
+        
+        Vr_tot = np.concatenate([self.Vr, Vr_new], axis=0)
+        Vr_tot_torch = torch.from_numpy(Vr_tot).contiguous().double()
+        
+        # If the uncertainty is passed, create new set of uncertainties
+        if A_sigma_new is not None:
+            Vr_sigma_new = np.zeros_like(A_sigma_new)
+            for i in range(self.r):
+                Vr_sigma_new[:,i] = A_sigma_new[:,i]/self.Sigma_r[i]
 
-        return X_rec
-    
+            Vr_sigma_tot = np.concatenate([self.Vr_sigma, Vr_sigma_new], axis=0)
+            Vr_sigma_tot_torch = torch.from_numpy(Vr_sigma_tot).contiguous().double()
+            self.Vr_sigma = np.zeros_like(Vr_sigma_tot)
+                
+        
+        if self.gpr_type == 'MultiTask':
+
+                self.models[0].set_train_data(P0_tot_torch, Vr_tot_torch, strict=False)
+                
+                if retrain:
+                    temp = self._train(self.models[0], self.likelihoods[0], P0_tot_torch, Vr_tot_torch, 0)
+                    self.models[0], self.likelihoods[0], self.Vr_sigma = temp
+
+        else:
+            for i in range(self.r):
+
+                self.models[i].set_train_data(P0_tot_torch, Vr_tot_torch[:,i], strict=False)
+                
+                if retrain:
+                    likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(Vr_sigma_tot_torch[:, i]**2)
+                    self.models[i].likelihood = likelihood
+                    
+                    temp = self._train(self.models[i], self.likelihoods[i], P0_tot_torch, Vr_tot_torch[:,i], i)
+                    self.models[i], self.likelihoods[i], self.Vr_sigma[:,i] = temp
+
 if __name__ == '__main__':
     import matplotlib as mpl
     import matplotlib.pyplot as plt
@@ -657,27 +711,20 @@ if __name__ == '__main__':
         plt.show()
     #------------------------------------GPR ROM--------------------------------------------------
     # Create the gpr object
-    noise = torch.from_numpy(1e-3*np.ones(P_train.shape[0])).float()
-    likelihood = gpytorch.likelihoods.FixedNoiseGaussianLikelihood(noise=noise)
-    n_modes = 10
+    
+    # noise = torch.from_numpy(1e-3*np.ones(P_train.shape[0])).double()
+    # n_modes = 10
     # likelihood = gpytorch.likelihoods.GaussianLikelihood()
-    kernel = gpytorch.kernels.MaternKernel(ard_dims=n_modes)
-    mean = gpytorch.means.ZeroMean()
-    gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='MultiTask', likelihood=likelihood,
-              mean=mean, kernel=kernel)
-    # gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='SingleTask')
-    
-    # kernel = gpytorch.kernels.MaternKernel(ard_dims=n_modes, batch_shape=torch.Size([n_modes]))
-    # mean = gpytorch.means.ZeroMean(batch_shape=torch.Size([n_modes]))
-    # gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='MultiTask',
-    #           mean=mean, kernel=kernel)
-    
-    # gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='MultiTask')
+    # kernel = gpytorch.kernels.MaternKernel(ard_dims=n_modes)
+    # gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='SingleTask', likelihood=likelihood, 
+    #           kernel=kernel)
 
+    gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='MultiTask')
+    
     # Calculates the POD coefficients ap and the uncertainty for the test simulations
-    gpr.fit(verbose=False, rel_error=1e-3)
+    gpr.fit(verbose=True, rel_error=1e-3)
     Ap, Sigmap = gpr.predict(P_test)
-    print(Sigmap)
+    
     # Ap, Sigmap = gpr.fit_predict(P_test, decomp_type='POD', likelihood=likelihood, verbose=True)
     # Ap, Sigmap = gpr.fit_predict(P_test, decomp_type='POD', verbose=True)
     
@@ -693,3 +740,12 @@ if __name__ == '__main__':
 
     plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
 
+    gpr.update(P_test, Ap, Sigmap, retrain=True, verbose=True)
+    Ap, Sigmap = gpr.predict(P_test)
+    Xp = gpr.reconstruct(Ap)
+
+    x_test = X_test[ind*n_cells:(ind+1)*n_cells,3]
+    xp_test = Xp[ind*n_cells:(ind+1)*n_cells, 3]
+
+    plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)   
+ 

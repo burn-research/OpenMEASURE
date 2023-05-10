@@ -174,21 +174,24 @@ for i in range(n_sensors):
     y_qr[i,2] = np.argmax(C_qr[i,:]) // n_cells
 
 # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
-ap, xp = spr.fit_predict(C_qr, y_qr)
+spr.fit(C_qr)
+ap, sigmap = spr.predict(y_qr)
+xp = spr.reconstruct(ap)
 
 # Select the feature to plot
 str_ind = 'T'
 ind = features.index(str_ind)
 
 plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_cells:(ind+1)*n_cells, 3], 
-                xp[ind*n_cells:(ind+1)*n_cells]], cbar_label=str_ind)
+                xp[ind*n_cells:(ind+1)*n_cells, 0]], cbar_label=str_ind)
 
 #------------------------------------GPR ROM--------------------------------------------------
 # Create the gpr object
 gpr = GPR(X_train, n_features, xyz, P_train)
 
 # Calculates the POD coefficients ap and the uncertainty for the test simulations
-Ap, Sigmap = gpr.fit_predict(P_test, verbose=True)
+model, lh = gpr.fit(verbose=True)
+Ap, Sigmap = gpr.predict(P_test)
 
 # Reconstruct the high-dimensional state from the POD coefficients
 Xp = gpr.reconstruct(Ap)
