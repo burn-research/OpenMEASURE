@@ -75,7 +75,6 @@ class ROM():
            self.n_features = n_features
            self.xyz = xyz
            
-
     def scale_data(self, scale_type='std'):
         '''
         Return the scaled data matrix. The default is to scale the data to 
@@ -191,7 +190,7 @@ class ROM():
         else:
             return x
 
-    def decomposition(self, X0, decomp_type='POD', select_modes='variance', n_modes=99, 
+    def decomposition(self, X0, decomp_type='POD', limits=None, select_modes='variance', n_modes=99, 
                       solver='ECOS', abstol=1e-3, verbose=False):
         '''
         Return the taylored basis and the amount of variance of the modes.
@@ -205,6 +204,10 @@ class ROM():
             Type of decomposition. The default is 'POD'.
             If 'CPOD' it will calculate the constrained POD scores.
         
+        limits : list, optional
+            List of minimum and maximum constraints. Required if decomp_type is 'CPOD'.
+            The default is None.
+
         select_modes : str, optional
             Method of modes selection.
         
@@ -262,17 +265,25 @@ class ROM():
             Gr = np.zeros_like(Ar)
             for i in range(Ar.shape[0]):
                 g = cp.Variable(r)
+                g.value = Ar[i, :]
+
                 x0_tilde = Ur @ g
-                x_tilde = SPR.unscale_data(self, x0_tilde)
                 
+                if limits is not None:
+                    x0_min = (limits[0] - self.X_cnt[:,0])/self.X_scl[:,0]
+                    x0_max = (limits[1] - self.X_cnt[:,0])/self.X_scl[:,0]
+                    x0_max[x0_max > 100] = 100
+                else:
+                    raise TypeError('limits has to be a list of numpy arrays')
+
                 objective = cp.Minimize(cp.pnorm(x0_tilde - X0[:,i], p=2))
-                constrs = [x_tilde >= 0]
+                constrs = [x0_tilde >= x0_min, x0_tilde <= x0_max]
                 prob = cp.Problem(objective, constrs)
                 
                 if verbose == True:
                     print(f'Calculating score {i+1}/{Ar.shape[0]}')
                     
-                min_value = prob.solve(solver=solver, abstol=abstol, verbose=verbose)
+                min_value = prob.solve(solver=solver, abstol=abstol, verbose=verbose, warm_start=True)
                 Gr[i,:] = g.value
 
             return Ur, Gr, exp_variance[:r]
@@ -704,7 +715,7 @@ class SPR(ROM):
         
         return C
 
-    def fit(self, C, is_Theta=False, scale_type='std', decomp_type='POD', select_modes='variance', 
+    def fit(self, C, is_Theta=False, scale_type='std', decomp_type='POD', limits=None, select_modes='variance', 
                     n_modes=99, method='OLS', solver='ECOS', abstol=1e-3, cond=False,
                     verbose=False):
         '''
@@ -728,6 +739,10 @@ class SPR(ROM):
             Type of decomposition. The default is 'POD'.
             If 'CPOD' it will calculate the constrained POD scores.
         
+        limits : list, optional
+            List of minimum and maximum constraints. Required if decomp_type is 'CPOD'.
+            The default is None.
+
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
             options are 'variance' or 'number'.
@@ -761,7 +776,7 @@ class SPR(ROM):
         
         self.scale_type = scale_type
         X0 = SPR.scale_data(self, scale_type)
-        Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, select_modes, 
+        Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, limits, select_modes, 
                                                    n_modes, solver, abstol, verbose)
         self.Ur = Ur
 

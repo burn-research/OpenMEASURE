@@ -315,7 +315,7 @@ class GPR(sps.ROM):
         P0 = (P - P_cnt)/P_scl
         return P0    
 
-    def fit(self, scaleX_type='std', scaleP_type='std', decomp_type='POD', select_modes='variance', 
+    def fit(self, scaleX_type='std', scaleP_type='std', decomp_type='POD', limits=None, select_modes='variance', 
             n_modes=99, max_iter=1000, rel_error=1e-5, lr=0.1, solver='ECOS', abstol=1e-3, verbose=False):
         '''
         Fit the GPR model.
@@ -332,7 +332,11 @@ class GPR(sps.ROM):
         decomp_type : str, optional
             Type of decomposition. The default is 'POD'. The available options
             are 'POD' and 'CPOD'
-
+        
+        limits : list, optional
+            List of minimum and maximum constraints. Required if decomp_type is 'CPOD'.
+            The default is None.
+        
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
             options are 'variance' or 'number'.
@@ -391,7 +395,8 @@ class GPR(sps.ROM):
 
         X0 = self.scale_data(scaleX_type)
         
-        Ur, Ar, exp_variance_r = self.decomposition(X0, decomp_type, select_modes, n_modes, solver, abstol, verbose)
+        Ur, Ar, exp_variance_r = self.decomposition(X0, decomp_type, limits, select_modes, n_modes, 
+                                                    solver, abstol, verbose)
         
         self.Ur = Ur
         self.Ar = Ar
