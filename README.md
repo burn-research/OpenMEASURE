@@ -16,6 +16,7 @@ The following packages will be installed:
 * Gpytorch >= 1.5.1
 * Cvxpy >= 1.1.3
 * Openmdao >= 3.25.0
+* Pyvista >= 0.41.1
 
 ## Techniques
 
@@ -28,6 +29,8 @@ The following packages will be installed:
     * Sparse placement for reconstruction (OLS and COLS methods)
 
 * Multifidelity models with Co-Kriging
+
+* Utilities for Computed Tomography of Chemiluminescence
 
 ## Usage
 

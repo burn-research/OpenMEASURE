@@ -367,12 +367,14 @@ class ROM():
             The high-dimensional representation of the state of the system, size (n,n_p)
             
         '''
+    
         if Ar.ndim < 2:
                 Ar = Ar[np.newaxis, :]
 
         n_p = Ar.shape[0]
         n = self.Ur.shape[0]
         X_rec = np.zeros((n, n_p))
+            
         for i in range(n_p):
             x0_rec = self.Ur @ Ar[i,:]
             X_rec[:,i] = self.unscale_data(x0_rec)
@@ -381,8 +383,6 @@ class ROM():
 
     def adaptive_sampling(self, P, scale_type='std'):
         '''
-        
-
         Parameters
         ----------
         P : numpy array
@@ -626,7 +626,7 @@ class SPR(ROM):
         optimal_sensors = np.array(sensor_list_glb)
         return optimal_sensors
 
-    def optimal_placement(self, calc_type='qr', decomp_type='POD', n_sensors=10, 
+    def optimal_placement(self, calc_type='qr', decomp_type='POD', limits=None, n_sensors=10, 
                           mask=None, d_min=0., scale_type='std', select_modes='variance', 
                           n_modes=99, solver='ECOS', abstol=1e-3, verbose=False):
         '''
@@ -641,6 +641,10 @@ class SPR(ROM):
         decomp_type : str, optional
             Type of decomposition. The default is 'POD'.
             If 'CPOD' it will calculate the constrained POD scores.
+        
+        limits : list, optional
+            List of minimum and maximum constraints. Required if decomp_type is 'CPOD'.
+            The default is None.    
         
         n_sensors : int, optional
             Number of sensors to calculate. Only used if the algorithm is 'gem'.
@@ -688,10 +692,11 @@ class SPR(ROM):
         n = self.X.shape[0]
 
         X0 = SPR.scale_data(self, scale_type)
-        Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, select_modes, n_modes, 
+        
+        Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, limits, select_modes, n_modes, 
                                                solver, abstol, verbose)
         r = Ur.shape[1]
-
+        
         if calc_type == 'qr':
             # Calculate the QRCP placement
             if mask is not None:
@@ -778,11 +783,12 @@ class SPR(ROM):
         X0 = SPR.scale_data(self, scale_type)
         Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, limits, select_modes, 
                                                    n_modes, solver, abstol, verbose)
+        
         self.Ur = Ur
 
         if not is_Theta:
             self.C = C
-            Theta = C @ Ur
+            Theta = C.dot(Ur)
         else:
             Theta = C
 
@@ -814,32 +820,47 @@ class SPR(ROM):
 
         Parameters
         ----------
-        y : numpy array
-            The measurement vector, size (s,3). The first column contains
-            the measurements, the second column contains the uncertainty (std deviation), 
-            and the third column contains which feature is measured.
+        y : numpy array or list of numpy arrays
+            Either a  measurement vector, size (s,3), or a list of measurement vectors.
+            The first column contains the measurements, the second column contains 
+            the uncertainty (std deviation), and the third column contains which 
+            feature is measured.
 
         Returns
         -------
-        ar : numpy array
-            The low-dimensional projection of the state of the system, size (r,)
-        ar_sigma : numpy array
-            The uncertainty (standard deviation) of the projection, size (r,).
+        Ar : numpy array
+            The low-dimensional projection of the state of the system, size (n,r) where
+            n is the number of measurement vectors in y.
+        Ar_sigma : numpy array
+            The uncertainty (standard deviation) of the projection, size (n,r).
 
         '''
-        if self.Theta.shape[0] != y.shape[0]:
-            raise ValueError('The number of rows of Theta does not match the number' \
-                             ' of rows of y.')
-        
-        if y.shape[1] != 3:
-            raise ValueError('The y array has the wrong number of columns. y has' \
-                              ' to have dimensions (s,3).')
-        
-        if hasattr(self, 'Theta'):
-            y0 = self.scale_vector(y)
+        if isinstance(y, np.ndarray):
+            y = [y]
+
+        for i in range(len(y)):
+            if self.Theta.shape[0] != y[i].shape[0]:
+                raise ValueError('The number of rows of Theta does not match the number' \
+                                ' of rows of y.')
             
-            if not np.any(y[:,1]):
-                W = np.eye(y.shape[0])
+            if y[i].shape[1] != 3:
+                raise ValueError('The y array has the wrong number of columns. y has' \
+                                    ' to have dimensions (s,3).')
+        
+        if not hasattr(self, 'Theta'):
+            raise AttributeError('The function fit has to be called '\
+                                 'before calling predict.')
+
+        n = len(y)
+        
+        Ar = np.zeros((n, self.r))
+        Ar_sigma = np.zeros((n, self.r))
+        
+        for i in range(n):
+            y0 = self.scale_vector(y[i])
+            
+            if not np.any(y[i][:,1]):
+                W = np.eye(y[i].shape[0])
                 ar_sigma = np.zeros((self.r, ))
             else:
                 W = np.diag(1/y0[:,1])  # Weights used for the weighted OLS and COLS
@@ -865,16 +886,15 @@ class SPR(ROM):
                 min_value = prob.solve(solver=self.solver, abstol=self.abstol, 
                                         verbose=self.verbose)
                 ar = g.value
-                
+            
             else:
                 raise NotImplementedError('The prediction method selected has not been '\
-                                          'implemented yet')
-            
-        else:
-            raise AttributeError('The function fit has to be called '\
-                                 'before calling predict.')
-            
-        return ar, ar_sigma
+                                            'implemented yet')    
+                
+            Ar[i, :] = ar
+            Ar_sigma[i, :]  = ar_sigma
+        
+        return Ar, Ar_sigma
 
 if __name__ == '__main__':  
     import matplotlib as mpl
@@ -998,7 +1018,7 @@ if __name__ == '__main__':
     # Compute the optimal measurement matrix using qr decomposition
     n_sensors = 14
     C_qr = spr.optimal_placement(select_modes='number', n_modes=n_sensors)
-
+    
     # Get the sensors positions and features
     xz_sensors = np.zeros((n_sensors, 4))
     for i in range(n_sensors):
@@ -1017,14 +1037,14 @@ if __name__ == '__main__':
 
     
     # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
-    spr.fit(C_qr, decomp_type='POD', verbose=True, select_modes='number', n_modes=14, method='COLS')
-    ap, ap_sigma = spr.predict(y_qr)
-    xp = spr.reconstruct(ap[np.newaxis, :])
+    spr.fit(C_qr, decomp_type='POD', verbose=False, select_modes='number', n_modes=14, method='COLS')
+    Ap, Ap_sigma = spr.predict(y_qr)
+    Xp = spr.reconstruct(Ap)
 
     # Select the feature to plot
     str_ind = 'OH'
     ind = features.index(str_ind)
 
     plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_cells:(ind+1)*n_cells, 3], 
-                    xp[ind*n_cells:(ind+1)*n_cells, 0]], cbar_label=str_ind)
+                    Xp[ind*n_cells:(ind+1)*n_cells, 0]], cbar_label=str_ind)
   
