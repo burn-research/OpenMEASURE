@@ -496,7 +496,7 @@ class GPR(sps.ROM):
                 self.models[0].eval()
                 self.likelihoods[0].eval()
 
-                observed_pred = self.models[0](P0_star_torch)
+                observed_pred = self.likelihoods[0](self.models[0](P0_star_torch))
                 V_pred = observed_pred.mean.detach().numpy()
                 V_sigma = observed_pred.stddev.detach().numpy()
                 
@@ -509,7 +509,7 @@ class GPR(sps.ROM):
                     self.models[i].eval()
                     self.likelihoods[i].eval()
 
-                    observed_pred = self.models[i](P0_star_torch)
+                    observed_pred = self.likelihoods[i](self.models[i](P0_star_torch))
                     V_pred[:,i] = observed_pred.mean.detach().numpy()
                     V_sigma[:,i] = observed_pred.stddev.detach().numpy()
                     
