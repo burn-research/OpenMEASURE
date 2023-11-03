@@ -74,7 +74,13 @@ class ROM():
            self.X = X
            self.n_features = n_features
            self.xyz = xyz
-           
+        
+        n = self.X.shape[0]
+        self.n_points = n // self.n_features
+        if n % self.n_features != 0:
+            raise Exception('The number of rows of X is not a multiple of n_features')
+            exit()
+
     def scale_data(self, scale_type='std'):
         '''
         Return the scaled data matrix. The default is to scale the data to 
@@ -94,12 +100,6 @@ class ROM():
 
         '''
         
-        n = self.X.shape[0]
-        self.n_points = n // self.n_features
-        if n % self.n_features != 0:
-            raise Exception('The number of rows of X is not a multiple of n_features')
-            exit()
-
         X_cnt = np.zeros_like(self.X)
         X_scl = np.zeros_like(self.X)
         
@@ -166,7 +166,46 @@ class ROM():
         X0 = (self.X - X_cnt)/X_scl
 
         return X0
+
+    def scale_limits(self, limits):
+        '''
+        Return a list contained the minimum and maximum scaled limits as numpy arrays.
+        The arrays have dimensions n, while the input limits have dimensions n_features.
+        
+        Parameters
+        ----------
+        limits : list
+            List containing two n_features dimensional arrays for the minimum and maximum 
+            values per feature. 
+
+        Returns
+        -------
+        limits0 : list
+            List containing two n dimensional arrays for the scaled minimum and maximum 
+            values. 
+
+        '''
+
+        limits0 = []
+        for limit in limits:
+            limit0 = np.zeros((self.X_cnt.shape[0],))
+
+            for i in range(self.n_features):
+                temp = ((limit[i] - self.X_cnt[i*self.n_points:(i+1)*self.n_points, 0])
+                        /self.X_scl[i*self.n_points:(i+1)*self.n_points, 0])
+                
+                # This is done for numerical stability reasons
+                if np.min(temp) < -100:
+                    temp = -100
+                elif np.max(temp) > 100:
+                    temp = 100
             
+                limit0[i*self.n_points:(i+1)*self.n_points] = temp
+
+            limits0.append(limit0)
+
+        return limits0
+
     def unscale_data(self, x0):
         '''
         Return the unscaled vector.
@@ -270,9 +309,11 @@ class ROM():
                 x0_tilde = Ur @ g
                 
                 if limits is not None:
-                    x0_min = (limits[0] - self.X_cnt[:,0])/self.X_scl[:,0]
-                    x0_max = (limits[1] - self.X_cnt[:,0])/self.X_scl[:,0]
-                    x0_max[x0_max > 100] = 100
+                    limits0 = self.scale_limits(limits)
+
+                    x0_min = limits0[0]
+                    x0_max = limits0[1]
+
                 else:
                     raise TypeError('limits has to be a list of numpy arrays')
 
@@ -283,7 +324,7 @@ class ROM():
                 if verbose == True:
                     print(f'Calculating score {i+1}/{Ar.shape[0]}')
                     
-                min_value = prob.solve(solver=solver, abstol=abstol, verbose=verbose, warm_start=True)
+                prob.solve(solver=solver, abstol=abstol, verbose=verbose, warm_start=True)
                 Gr[i,:] = g.value
 
             return Ur, Gr, exp_variance[:r]
@@ -438,6 +479,68 @@ class ROM():
         sample_new = sample[j_new, :]
         return sample_new
         
+    def fit(self, scale_type='std', decomp_type='POD', limits=None, select_modes='variance', 
+            n_modes=99, solver='ECOS', abstol=1e-3, cond=False, verbose=False, basis=None):
+        '''
+        Fit the taylored basis to the sparse sensing model.
+
+        Parameters
+        ----------
+        scale_type : str, optional
+            Type of scaling method. The default is 'std'. Standard scaling is the 
+            only scaling implemented for the 'COLS' method.
+
+        decomp_type : str, optional
+            Type of decomposition. The default is 'POD'.
+            If 'CPOD' it will calculate the constrained POD scores.
+        
+        limits : list, optional
+            List of minimum and maximum constraints. Required if decomp_type is 'CPOD'.
+            The default is None.
+
+        select_modes : str, optional
+            Type of mode selection. The default is 'variance'. The available 
+            options are 'variance' or 'number'.
+        
+        n_modes : int or float, optional
+            Parameters that control the amount of modes retained. The default is 
+            99, which represents 99% of the variance. If select_modes='number',
+            n_modes represents the number of modes retained.
+
+        method : str, optional
+            Method used to comupte the solution of the y0 = Theta * a linear 
+            system. The choice are 'OLS' or 'COLS' which is constrained OLS. The
+            default is 'OLS'.
+            
+        solver : str, optional
+            Solver used for the constrained optimization problem. Only used if 
+            the method selected is 'CPOD'. The default is 'ECOS'.
+            
+        abstol : float, optional
+            The absolute tolerance used to terminate the constrained optimization
+            problem. The default is 1e-3.
+            
+        verbose : bool, optional
+            If True, it displays the output from the constrained optimiziation 
+            solver. The default is False
+
+        basis : tuple, optional
+            If it is not None, the tuple contains the matrices Ur and Ar, wich are
+            set avoiding the computation of the decomposition.
+        '''
+        
+        self.scale_type = scale_type
+        X0 = self.scale_data(scale_type)
+        if basis is None:
+            Ur, Ar, _ = self.decomposition(X0, decomp_type, limits, select_modes, 
+                                                   n_modes, solver, abstol, verbose)
+        else:
+            Ur = basis[0]
+            Ar = basis[1]
+
+        self.Ur = Ur
+        self.Ar = Ar
+        self.r = Ar.shape[1]
 
 class SPR(ROM):
     '''
@@ -691,9 +794,9 @@ class SPR(ROM):
         '''
         n = self.X.shape[0]
 
-        X0 = SPR.scale_data(self, scale_type)
+        X0 = self.scale_data(scale_type)
         
-        Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, limits, select_modes, n_modes, 
+        Ur, _, _ = self.decomposition(X0, decomp_type, limits, select_modes, n_modes, 
                                                solver, abstol, verbose)
         r = Ur.shape[1]
         
@@ -709,7 +812,7 @@ class SPR(ROM):
                 
         elif calc_type == 'gem':
             # Calculate the GEM placement
-            P = SPR.gem(self, Ur, n_sensors, mask, d_min, verbose)
+            P = self.gem(Ur, n_sensors, mask, d_min, verbose)
             s = P.size
             C = np.zeros((s, n))
             for j in range(s):
@@ -720,8 +823,7 @@ class SPR(ROM):
         
         return C
 
-    def fit(self, C, is_Theta=False, scale_type='std', decomp_type='POD', limits=None, select_modes='variance', 
-                    n_modes=99, method='OLS', solver='ECOS', abstol=1e-3, cond=False,
+    def train(self, C, is_Theta=False, limits=None, method='OLS', solver='ECOS', abstol=1e-3, cond=False,
                     verbose=False):
         '''
         Fit the taylored basis and the measurement matrix.
@@ -736,26 +838,9 @@ class SPR(ROM):
         is_Theta: bool, optional
             If True, C is assumed to be Theta. The default is False.
         
-        scale_type : str, optional
-            Type of scaling method. The default is 'std'. Standard scaling is the 
-            only scaling implemented for the 'COLS' method.
-
-        decomp_type : str, optional
-            Type of decomposition. The default is 'POD'.
-            If 'CPOD' it will calculate the constrained POD scores.
-        
         limits : list, optional
             List of minimum and maximum constraints. Required if decomp_type is 'CPOD'.
             The default is None.
-
-        select_modes : str, optional
-            Type of mode selection. The default is 'variance'. The available 
-            options are 'variance' or 'number'.
-        
-        n_modes : int or float, optional
-            Parameters that control the amount of modes retained. The default is 
-            99, which represents 99% of the variance. If select_modes='number',
-            n_modes represents the number of modes retained.
 
         method : str, optional
             Method used to comupte the solution of the y0 = Theta * a linear 
@@ -779,24 +864,18 @@ class SPR(ROM):
             raise ValueError('The number of columns of C does not match the number' \
                               ' of rows of X.')
         
-        self.scale_type = scale_type
-        X0 = SPR.scale_data(self, scale_type)
-        Ur, Ar, exp_variance_r = SPR.decomposition(self, X0, decomp_type, limits, select_modes, 
-                                                   n_modes, solver, abstol, verbose)
-        
-        self.Ur = Ur
-
         if not is_Theta:
             self.C = C
-            Theta = C.dot(Ur)
+            Theta = C.dot(self.Ur)
         else:
             Theta = C
 
-        if (Theta.shape[1] != Ur.shape[1]):
+        if (Theta.shape[1] != self.Ur.shape[1]):
             raise ValueError('The number of columns of Theta does not match the number' \
                               ' of columns of Ur.')
 
         self.Theta = Theta
+        self.limits = limits
         self.method = method
         self.solver = solver
         self.abstol = abstol
@@ -877,11 +956,12 @@ class SPR(ROM):
                 
                 x0_tilde = self.Ur @ g
                 
-                zero = np.zeros_like(x0_tilde)
-                zero_scl = (zero - self.X_cnt[:,0])/self.X_scl[:,0]
+                # zero = np.zeros_like(x0_tilde)
+                # zero_scl = (zero - self.X_cnt[:,0])/self.X_scl[:,0]
+                limits0 = self.scale_limits(self.limits)
                 
                 objective = cp.Minimize(cp.sum_squares(W @ (y0[:,0] - self.Theta @ g)))
-                constrs = [x0_tilde >= zero_scl]
+                constrs = [x0_tilde >= limits0[0], x0_tilde <= limits0[1]]
                 prob = cp.Problem(objective, constrs)
                 min_value = prob.solve(solver=self.solver, abstol=self.abstol, 
                                         verbose=self.verbose)
@@ -1037,7 +1117,13 @@ if __name__ == '__main__':
 
     
     # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
-    spr.fit(C_qr, decomp_type='POD', verbose=False, select_modes='number', n_modes=14, method='COLS')
+    spr.fit(decomp_type='POD', verbose=False, select_modes='number', n_modes=14)
+    
+    # features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
+    limit_min = np.array([200., 0., 0., 0., 0., 0., 0., 0., 0.])
+    limit_max = np.array([3000., 1., 1., 1., 1., 1., 1., 1., 1.])
+
+    spr.train(C_qr, method='COLS', limits=[limit_min, limit_max])
     Ap, Ap_sigma = spr.predict(y_qr)
     Xp = spr.reconstruct(Ap)
 
