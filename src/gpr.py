@@ -16,11 +16,10 @@ import torch
 import gpytorch
 from scipy.stats import kurtosis
 from gpytorch.likelihoods import MultitaskGaussianLikelihood
-from gpytorch.means import ConstantMean
-from gpytorch.kernels import ScaleKernel, MaternKernel
 from gpytorch.distributions import MultitaskMultivariateNormal, MultivariateNormal
 from gpytorch.mlls import ExactMarginalLogLikelihood
 import sparse_sensing as sps
+import cvxpy as cp
 
 class ExactGPModel(gpytorch.models.ExactGP):
     '''
@@ -106,7 +105,7 @@ class BatchIndipendentMultitaskGPModel(gpytorch.models.ExactGP):
         return MultitaskMultivariateNormal.from_batch_mvn(MultivariateNormal(mean_x, 
                                                                              kernel_x))
 
-class ConstrainedMultitaskGPModel(gpytorch.models.ExactGP):
+class PIMultitaskGPModel(gpytorch.models.ExactGP):
     '''
     Subclass used to build a Multitask GP Model inheriting from the ExactGP model. 
     The added loss is used to introduce a physics-informed loss.
@@ -533,7 +532,7 @@ class GPR(sps.ROM):
         
         return models, likelihoods
     
-    def predict(self, P_star):
+    def predict(self, P_star, problem_dict=None, **kwargs):
         '''
         Return the prediction vector. 
         This method has to be used after fit.
@@ -542,6 +541,13 @@ class GPR(sps.ROM):
         ----------
         P_star : numpy array
             The set of design features to evaluate the prediction, size (n_p,d).
+        
+        problem_dict : dict, optional
+            Dictonary used to solve the constrained optimization problem. If passed,
+            it has to contain: 'problem' (the cvxpy optimisation problem), 
+            'mean' and 'cov' (the cvxpy parameters of the mean and covariance) and 
+            'v' (the variable of the optimisation problem).
+            The constrained optimisation only work for MultiTask models.
 
         Returns
         -------
@@ -553,45 +559,54 @@ class GPR(sps.ROM):
 
         '''
         
-        if hasattr(self, 'models'):
-            if P_star.ndim < 2:
-                P_star = P_star[np.newaxis, :]
-
-            n_p = P_star.shape[0]
-
-            P0_star = np.zeros_like(P_star)
-            for i in range(P_star.shape[1]):
-                P0_star[:,i] = (P_star[:,i] - self.P_cnt[0,i]) / self.P_scl[0,i]
-            
-            P0_star_torch = torch.from_numpy(P0_star).contiguous().double()
-            
-            if self.gpr_type == 'MultiTask':    
-
-                # Set into eval mode
-                self.models[0].eval()
-                self.likelihoods[0].eval()
-
-                observed_pred = self.likelihoods[0](self.models[0](P0_star_torch))
-                V_pred = observed_pred.mean.detach().numpy()
-                V_sigma = observed_pred.stddev.detach().numpy()
-                
-            else:
-                V_pred = np.zeros((n_p, self.r))
-                V_sigma = np.zeros((n_p, self.r))
-
-                for i in range(self.r):
-                    # Set into eval mode
-                    self.models[i].eval()
-                    self.likelihoods[i].eval()
-
-                    observed_pred = self.likelihoods[i](self.models[i](P0_star_torch))
-                    V_pred[:,i] = observed_pred.mean.detach().numpy()
-                    V_sigma[:,i] = observed_pred.stddev.detach().numpy()
-                    
-        else:
+        if not hasattr(self, 'models'):
             raise AttributeError('The function fit has to be called '\
                                   'before calling predict.')
         
+        if P_star.ndim < 2:
+            P_star = P_star[np.newaxis, :]
+
+        n_p = P_star.shape[0]
+
+        P0_star = np.zeros_like(P_star)
+        for i in range(P_star.shape[1]):
+            P0_star[:,i] = (P_star[:,i] - self.P_cnt[0,i]) / self.P_scl[0,i]
+        
+        P0_star_torch = torch.from_numpy(P0_star).contiguous().double()
+        
+        if self.gpr_type == 'MultiTask':    
+
+            # Set into eval mode
+            self.models[0].eval()
+            self.likelihoods[0].eval()
+
+            observed_pred = self.likelihoods[0](self.models[0](P0_star_torch))
+            V_pred = observed_pred.mean.detach().numpy()
+            V_sigma = observed_pred.stddev.detach().numpy()
+
+            if problem_dict is not None:        
+                for i in range(n_p):
+                    observed_pred = self.likelihoods[0](self.models[0](P0_star_torch[[i], :]))
+                    
+                    problem_dict['mean'].value = observed_pred.mean.T.detach().numpy()
+                    problem_dict['cov'].value = observed_pred.covariance_matrix.detach().numpy()
+
+                    problem_dict['problem'].solve(**kwargs)
+                    V_pred[i, :] =  problem_dict['v'].value.flatten()
+
+        else:
+            V_pred = np.zeros((n_p, self.r))
+            V_sigma = np.zeros((n_p, self.r))
+
+            for i in range(self.r):
+                # Set into eval mode
+                self.models[i].eval()
+                self.likelihoods[i].eval()
+
+                observed_pred = self.likelihoods[i](self.models[i](P0_star_torch))
+                V_pred[:,i] = observed_pred.mean.detach().numpy()
+                V_sigma[:,i] = observed_pred.stddev.detach().numpy()
+                                
         A_pred = np.zeros_like(V_pred)
         A_sigma = np.zeros_like(V_sigma)
         for i in range(self.r):
@@ -675,7 +690,7 @@ class GPR(sps.ROM):
                     self.models[i], self.likelihoods[i], self.Vr_sigma[:,i] = temp
 
 
-class CGPR(GPR):
+class PIGPR(GPR):
     
     def __init__(self, X, n_features, xyz, P, P_cstr, AddedLoss):
         
@@ -684,7 +699,7 @@ class CGPR(GPR):
         self.AddedLoss = AddedLoss
     
     def train(self, mean=None, kernel=None, likelihood=None, max_iter=1000, 
-              rel_error=1e-5, lr=0.1, verbose=False):
+              rel_error=1e-5, lr=0.1, verbose=False, loss_dict=None):
         '''
         Train the GPR model.
         Return the model and likelihood.
@@ -718,8 +733,10 @@ class CGPR(GPR):
         verbose : bool, optional
             If True, it will print informations on the training of the hyperparameters.
             The default is False.
-            
 
+        loss_dict : dict, optional
+            Dict passed to the added loss. Default is None.
+            
         Returns
         -------
         model : gpytorch.models
@@ -763,13 +780,14 @@ class CGPR(GPR):
             self.likelihood = MultitaskGaussianLikelihood(num_tasks=self.r)
         
         likelihoods.append(self.likelihood)
-        models.append(ConstrainedMultitaskGPModel(P0_torch, Vr_torch, likelihoods[0], 
+        models.append(PIMultitaskGPModel(P0_torch, Vr_torch, likelihoods[0], 
                                                   self.mean, self.kernel, self.AddedLoss))
         
         models[0].double()
         likelihoods[0].double()
         
-        models[0], likelihoods[0], Vr_sigma = self._train_loop(models[0], likelihoods[0], P0_torch, Vr_torch, P0_tot_torch)
+        models[0], likelihoods[0], Vr_sigma = self._train_loop(models[0], likelihoods[0], P0_torch, 
+                                                               Vr_torch, P0_tot_torch, loss_dict)
         
         self.Vr_sigma = Vr_sigma
         self.models = models
@@ -824,7 +842,7 @@ class CGPR(GPR):
         if likelihood is None:
             likelihood = MultitaskGaussianLikelihood(num_tasks=self.r)
         
-        model = (ConstrainedMultitaskGPModel(P0_torch, Vr_torch, likelihood, 
+        model = (PIMultitaskGPModel(P0_torch, Vr_torch, likelihood, 
                                              mean, kernel, self.AddedLoss))
 
         model.double()
@@ -843,7 +861,7 @@ class CGPR(GPR):
 
         return loss_mll, Vr_pred_train
 
-    def _train_loop(self, model, likelihood, P0_torch, Vr_torch, P0_tot_torch):
+    def _train_loop(self, model, likelihood, P0_torch, Vr_torch, P0_tot_torch, loss_dict):
         
         model.train()
         likelihood.train()
@@ -865,8 +883,9 @@ class CGPR(GPR):
             model.train()
             likelihood.train()
             
-            loss_ml = model.likelihood(model(P0_torch)).log_prob(model.Y_train).detach()
-            output = model(P0_torch, output=output_cstr, loss_ml=loss_ml, verbose=self.verbose)
+            loss_ml = likelihood(model(P0_torch)).log_prob(Vr_torch).detach()
+            output = model(P0_torch, output=output_cstr, loss_ml=loss_ml, 
+                           verbose=self.verbose, loss_dict=loss_dict)
             
             loss = -mll(output, Vr_torch)
             loss.backward()
@@ -884,6 +903,7 @@ class CGPR(GPR):
             Vr_sigma = output.stddev.detach().numpy()
 
         return model, likelihood, Vr_sigma
+
 
 if __name__ == '__main__':
     import matplotlib as mpl
@@ -1007,7 +1027,7 @@ if __name__ == '__main__':
     
     # Calculates the POD coefficients ap and the uncertainty for the test simulations
     gpr.fit()
-    models, likelihoods = gpr.train(max_iter=10, verbose=True, lr=0.01)
+    models, likelihoods = gpr.train(max_iter=1000, verbose=False, lr=0.01)
     Ap, Sigmap = gpr.predict(P_test)
     
     # Reconstruct the high-dimensional state from the POD coefficients
@@ -1020,7 +1040,7 @@ if __name__ == '__main__':
     x_test = X_test[ind*n_cells:(ind+1)*n_cells,3]
     xp_test = Xp[ind*n_cells:(ind+1)*n_cells, 3]
 
-    # plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
+    plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
 
     # gpr.update(P_test, Ap, Sigmap, retrain=True, verbose=True)
     # Ap, Sigmap = gpr.predict(P_test)
@@ -1031,94 +1051,36 @@ if __name__ == '__main__':
 
     # plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
 
-    #------------------------------------CGPR ROM--------------------------------------------------
-    # Create the gpr object
-    
-    class AddedLoss(gpytorch.mlls.AddedLossTerm):
-        def __init__(self, kwargs):
-            self.output = kwargs.get('output')
-            self.loss_ml = kwargs.get('loss_ml')
-            self.verbose = kwargs.get('verbose')
-            
-        def loss(self):
-            loss_l = limit_loss(self.output.mean) 
-                        
-            return loss_l
+    v = cp.Variable((gpr.r,1))
+    mean = cp.Parameter((gpr.r,1))
+    cov = cp.Parameter((gpr.r, gpr.r))
+    objective = cp.Maximize(-cp.matrix_frac(v-mean, cov))
 
-    def g(x):
-        return torch.maximum(torch.tensor(0),x)
-
-    def scale_limits(limits):
-        X_cnt = torch.from_numpy(cgpr.X_cnt)
-        X_scl = torch.from_numpy(cgpr.X_scl)
-        n_points = cgpr.n_points
-        
-        limits0 = []
-        for limit in limits:
-            limit_torch = torch.from_numpy(limit)
-            limit0 = torch.zeros((X_cnt.shape[0],))
-
-            for i in range(cgpr.n_features):
-                limit0[i*n_points:(i+1)*n_points] = ((limit[i] - X_cnt[i*n_points:(i+1)*n_points, 0])
-                                                    /X_scl[i*n_points:(i+1)*n_points, 0])
-
-            limits0.append(limit0)
-
-        return limits0
-
-    def limit_loss(output):
-        X0_output = torch.linalg.multi_dot([Ur, Sigma_r, output.T])
-
-        limit_error = torch.zeros_like(X0_output)
-
-        for j in range(limit_error.shape[1]):
-            limit_error[:,j] = (g(limits0[0] - X0_output[:,j]) + 
-                                g(X0_output[:,j] - limits0[1]))
-        
-        return -alpha_l*torch.linalg.matrix_norm(limit_error)
-    
-    def compute_alpha_l(loss_mll, Vr_pred_train):
-        loss_l = limit_loss(Vr_pred_train).detach()
-
-        if torch.abs(loss_l) < 1e-3:
-            alpha_l = torch.tensor(1)
-        else:
-            alpha_l = 0.5*torch.abs(loss_mll/loss_l)
-
-        return alpha_l
-
-    n_cstr = 2
-    d_array = np.linspace(P_train[:,0].min(), P_train[:,0].max(), n_cstr)
-    h2_array = np.linspace(P_train[:,1].min(), P_train[:,1].max(), n_cstr)
-    phi_array = np.linspace(P_train[:,2].min(), P_train[:,2].max(), n_cstr)
-
-    d_grid, h2_grid, phi_grid = np.meshgrid(d_array, h2_array, phi_array)
-    P_cstr = np.zeros((n_cstr**3,3))
-    P_cstr[:,0] = d_grid.flatten()
-    P_cstr[:,1] = h2_grid.flatten()
-    P_cstr[:,2] = phi_grid.flatten()
-    
-    cgpr = CGPR(X_train, n_features, xyz, P_train, P_cstr, AddedLoss)
-    cgpr.fit()
-    Ur = torch.from_numpy(cgpr.Ur).contiguous().double()
-    Sigma_r = torch.from_numpy(np.diag(cgpr.Sigma_r)).contiguous().double()
-    
+    # features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
     limit_min = np.array([200, 0, 0, 0, 0, 0, 0, 0, 0], dtype='float')
-    limit_max = np.array([5000, 1, 1, 1, 1, 1, 1, 1, 1], dtype='float')
-    limits0 = scale_limits([limit_min, limit_max])
+    limit_max = np.array([3000, 1, 1, 1, 1, 1, 1, 1, 1], dtype='float')
+    limits0 = gpr.scale_limits([limit_min, limit_max])
 
-    alpha_l = 0.
-    loss_mll, Vr_pred_train = cgpr.compute_mll()
-    # alpha_l = compute_alpha_l(loss_mll, Vr_pred_train)
-    cgpr.train(likelihood=likelihoods[0], mean=models[0].mean_module, 
-               kernel=models[0].covar_module, max_iter=10, verbose=True, lr=0.01)
-    Ap, Sigmap = cgpr.predict(P_test)
-    Xp = cgpr.reconstruct(Ap)
+    x0 = cp.matmul(gpr.Ur, cp.multiply(gpr.Sigma_r[:, np.newaxis], v))
+    constraints = [x0 >= limits0[0][:, np.newaxis], 
+                   x0 <= limits0[1][:, np.newaxis]]
+
+    problem = cp.Problem(objective, constraints)
+    problem_dict = {'problem': problem,
+                    'v': v,
+                    'mean': mean,
+                    'cov': cov}
+
+    Ap, Sigmap = gpr.predict(P_test, problem_dict, solver='CLARABEL', verbose=True)
+    
+    # Reconstruct the high-dimensional state from the POD coefficients
+    Xp = gpr.reconstruct(Ap)
 
     # Select the feature to plot
     str_ind = 'OH'
     ind = features.index(str_ind)
 
+    x_test = X_test[ind*n_cells:(ind+1)*n_cells,3]
     xp_test = Xp[ind*n_cells:(ind+1)*n_cells, 3]
 
     plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
