@@ -206,14 +206,18 @@ class ROM():
 
         return limits0
 
-    def unscale_data(self, x0):
+    def unscale_data(self, x0, sampling=None):
         '''
         Return the unscaled vector.
         
         Parameters
         ----------
         x0 : numpy array
-            Scaled vector to unscale, size (n,).
+            Scaled vector to unscale, size (n,) or (s,).
+
+        sampling : numpy array, optional
+            Matrix used to sample part of the reconstruction, size (s, n). Default
+            is None, meaning that the entire field is reconstructed.
         
         Returns
         -------
@@ -222,15 +226,17 @@ class ROM():
 
         '''
         
-        x = cp.multiply(self.X_scl[:,0], x0) + self.X_cnt[:,0]
+        if sampling is not None:
+            x = cp.multiply(sampling @ self.X_scl[:,0], x0) + sampling @ self.X_cnt[:,0]
+        else:
+            x = cp.multiply(self.X_scl[:,0], x0) + self.X_cnt[:,0]
         
         if type(x0) is np.ndarray:
             return x.value
         else:
             return x
 
-    def decomposition(self, X0, decomp_type='POD', limits=None, select_modes='variance', n_modes=99, 
-                      solver='ECOS', abstol=1e-3, verbose=False):
+    def decomposition(self, X0, select_modes='variance', n_modes=99):
         '''
         Return the taylored basis and the amount of variance of the modes.
 
@@ -239,14 +245,6 @@ class ROM():
         X0 : numpy array
             The scaled data matrix to be decomposed, size (n,p).
         
-        decomp_type : str, optional
-            Type of decomposition. The default is 'POD'.
-            If 'CPOD' it will calculate the constrained POD scores.
-        
-        limits : list, optional
-            List of minimum and maximum constraints. Required if decomp_type is 'CPOD'.
-            The default is None.
-
         select_modes : str, optional
             Method of modes selection.
         
@@ -254,17 +252,6 @@ class ROM():
             Parameter that controls the number of modes to be retained. If 
             select_modes = 'variance', n_modes can be a float between 0 and 100. 
             If select_modes = 'number', n_modes can be an integer between 1 and m.
-
-        solver : str, optional
-            Type of solver to use for solving the constrained minimization problem.
-            Refer to the cvxpy documentation. The default is 'ECOS'.
-
-        abstol : float, optional
-            Absolute accuracy for the constrained solver used for CPOD. 
-            Default is 1e-3.
-            
-        verbose : bool, optional
-            If True, it prints the solver outputs. Default is False.
 
         Returns
         -------
@@ -278,60 +265,15 @@ class ROM():
             Array containing the explained variance of the modes, size (p,) or (r,).
 
         '''
-        if decomp_type == 'POD':
-            # Compute the SVD of the scaled dataset
-            U, S, Vt = np.linalg.svd(X0, full_matrices=False)
-            A = np.matmul(np.diag(S), Vt).T
-            L = S**2    # Compute the eigenvalues
-            exp_variance = 100*np.cumsum(L)/np.sum(L)
-            Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
-            r = Ar.shape[1]
+        # Compute the SVD of the scaled dataset
+        U, S, Vt = np.linalg.svd(X0, full_matrices=False)
+        A = np.matmul(np.diag(S), Vt).T
+        L = S**2    # Compute the eigenvalues
+        exp_variance = 100*np.cumsum(L)/np.sum(L)
+        Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
+        r = Ar.shape[1]
 
-            return Ur, Ar, exp_variance[:r]
-        
-        elif decomp_type == 'CPOD':
-            # The constrained POD selects the POD scores by solving a constrained
-            # minimization problem where the function to minimize is the
-            # reconstruction error
-            
-            U, S, Vt = np.linalg.svd(X0, full_matrices=False)
-            A = np.matmul(np.diag(S), Vt).T
-            L = S**2    # Compute the eigenvalues
-            exp_variance = 100*np.cumsum(L)/np.sum(L)
-            Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
-            r = Ar.shape[1]
-            
-            Gr = np.zeros_like(Ar)
-            for i in range(Ar.shape[0]):
-                g = cp.Variable(r)
-                g.value = Ar[i, :]
-
-                x0_tilde = Ur @ g
-                
-                if limits is not None:
-                    limits0 = self.scale_limits(limits)
-
-                    x0_min = limits0[0]
-                    x0_max = limits0[1]
-
-                else:
-                    raise TypeError('limits has to be a list of numpy arrays')
-
-                objective = cp.Minimize(cp.pnorm(x0_tilde - X0[:,i], p=2))
-                constrs = [x0_tilde >= x0_min, x0_tilde <= x0_max]
-                prob = cp.Problem(objective, constrs)
-                
-                if verbose == True:
-                    print(f'Calculating score {i+1}/{Ar.shape[0]}')
-                    
-                prob.solve(solver=solver, abstol=abstol, verbose=verbose, warm_start=True)
-                Gr[i,:] = g.value
-
-            return Ur, Gr, exp_variance[:r]
-            
-        else:
-            raise NotImplementedError('The decomposition method selected has not been '\
-                                      'implemented yet')
+        return Ur, Ar, exp_variance[:r]
                 
     def reduction(self, U, A, exp_variance, select_modes, n_modes):
         '''
@@ -393,7 +335,7 @@ class ROM():
 
         return Ur, Ar
 
-    def reconstruct(self, Ar):
+    def reconstruct(self, Ar, sampling=None):
         '''
         Reconstruct the X matrix from the low-dimensional representation.
 
@@ -401,6 +343,10 @@ class ROM():
         ----------
         Ar : numpy array
             The matrix containing the low-dimensional coefficients, size (n_p,r).
+        
+        sampling : numpy array, optional
+            Matrix used to sample part of the reconstruction, size (s, n). Default
+            is None, meaning that the entire field is reconstructed.
 
         Returns
         -------
@@ -412,14 +358,16 @@ class ROM():
         if Ar.ndim < 2:
                 Ar = Ar[np.newaxis, :]
 
-        n_p = Ar.shape[0]
-        n = self.Ur.shape[0]
-        X_rec = np.zeros((n, n_p))
-            
-        for i in range(n_p):
-            x0_rec = self.Ur @ Ar[i,:]
-            X_rec[:,i] = self.unscale_data(x0_rec)
+        if sampling is not None:
+            X_rec = np.linalg.multi_dot([sampling, self.Ur, Ar.T])
+            for i in range(X_rec.shape[1]):
+                X_rec[:,i] = self.unscale_data(X_rec[:,i], sampling)
 
+        else:
+            X_rec = self.Ur @ Ar.T
+            for i in range(X_rec.shape[1]):
+                X_rec[:,i] = self.unscale_data(X_rec[:,i])
+    
         return X_rec
 
     def adaptive_sampling(self, P, scale_type='std'):
@@ -478,9 +426,37 @@ class ROM():
         j_new = np.argmax(Pot_basis)
         sample_new = sample[j_new, :]
         return sample_new
+
+    def CPOD(self, problem_dict, **kwargs):
+        '''
+        Computes the constrained POD.
+        This method has to be used after fit.
+
+        Parameters
+        ----------
+        problem_dict : dict
+            Dictonary used to solve the constrained optimization problem.
+            It has to contain: 'problem' (the cvxpy optimisation problem), 
+            'x0' (the cvxpy parameter of the scaled vectors) and 
+            'g' (the variable of the optimisation problem).
+
+        '''
+        Gr = np.zeros_like(self.Ar)
+        for i in range(self.Ar.shape[0]):
+            
+            problem_dict['g'].value = self.Ar[i, :]
+            problem_dict['x0'].value = self.X0[:, i]
+            problem_dict['problem'].solve(**kwargs)
+            Gr[i,:] = problem_dict['g'].value
+
+        Vr = np.zeros_like(Gr)
+        for i in range(self.r):
+            Vr[:,i] = Gr[:,i]/self.Sigma_r[i]
         
-    def fit(self, scale_type='std', decomp_type='POD', limits=None, select_modes='variance', 
-            n_modes=99, solver='ECOS', abstol=1e-3, cond=False, verbose=False, basis=None):
+        self.Ar = Gr 
+        self.Vr = Vr     
+
+    def fit(self, scale_type='std', select_modes='variance', n_modes=99, basis=None):
         '''
         Fit the taylored basis to the sparse sensing model.
 
@@ -490,14 +466,6 @@ class ROM():
             Type of scaling method. The default is 'std'. Standard scaling is the 
             only scaling implemented for the 'COLS' method.
 
-        decomp_type : str, optional
-            Type of decomposition. The default is 'POD'.
-            If 'CPOD' it will calculate the constrained POD scores.
-        
-        limits : list, optional
-            List of minimum and maximum constraints. Required if decomp_type is 'CPOD'.
-            The default is None.
-
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
             options are 'variance' or 'number'.
@@ -506,34 +474,16 @@ class ROM():
             Parameters that control the amount of modes retained. The default is 
             99, which represents 99% of the variance. If select_modes='number',
             n_modes represents the number of modes retained.
-
-        method : str, optional
-            Method used to comupte the solution of the y0 = Theta * a linear 
-            system. The choice are 'OLS' or 'COLS' which is constrained OLS. The
-            default is 'OLS'.
-            
-        solver : str, optional
-            Solver used for the constrained optimization problem. Only used if 
-            the method selected is 'CPOD'. The default is 'ECOS'.
-            
-        abstol : float, optional
-            The absolute tolerance used to terminate the constrained optimization
-            problem. The default is 1e-3.
-            
-        verbose : bool, optional
-            If True, it displays the output from the constrained optimiziation 
-            solver. The default is False
-
+    
         basis : tuple, optional
             If it is not None, the tuple contains the matrices Ur and Ar, wich are
             set avoiding the computation of the decomposition.
         '''
         
         self.scale_type = scale_type
-        X0 = self.scale_data(scale_type)
+        self.X0 = self.scale_data(scale_type)
         if basis is None:
-            Ur, Ar, _ = self.decomposition(X0, decomp_type, limits, select_modes, 
-                                                   n_modes, solver, abstol, verbose)
+            Ur, Ar, _ = self.decomposition(self.X0, select_modes, n_modes)
         else:
             Ur = basis[0]
             Ar = basis[1]
@@ -541,6 +491,15 @@ class ROM():
         self.Ur = Ur
         self.Ar = Ar
         self.r = Ar.shape[1]
+
+        # Get the singular values and the orthonormal basis
+        Vr = np.zeros_like(Ar)
+        Sigma_r = np.zeros((self.r,))
+        for i in range(self.r):
+            Sigma_r[i] = np.linalg.norm(Ar[:,i])
+            Vr[:,i] = Ar[:,i]/Sigma_r[i]
+        
+        self.Sigma_r = Sigma_r
 
 class SPR(ROM):
     '''
@@ -581,7 +540,6 @@ class SPR(ROM):
 
     def __init__(self, X, n_features, xyz):
         super().__init__(X, n_features, xyz)
-
 
     def scale_vector(self, y):
         '''
@@ -729,9 +687,7 @@ class SPR(ROM):
         optimal_sensors = np.array(sensor_list_glb)
         return optimal_sensors
 
-    def optimal_placement(self, calc_type='qr', decomp_type='POD', limits=None, n_sensors=10, 
-                          mask=None, d_min=0., scale_type='std', select_modes='variance', 
-                          n_modes=99, solver='ECOS', abstol=1e-3, verbose=False):
+    def optimal_placement(self, calc_type='qr', n_sensors=10, mask=None, d_min=0., verbose=False):
         '''
         Return the matrix C containing the optimal placement of the sensors.
 
@@ -740,14 +696,6 @@ class SPR(ROM):
         calc_type : str, optional
             Type of algorithm used to compute the C matrix. The available methods
             are 'qr' and 'gem'. The default is 'qr'.
-        
-        decomp_type : str, optional
-            Type of decomposition. The default is 'POD'.
-            If 'CPOD' it will calculate the constrained POD scores.
-        
-        limits : list, optional
-            List of minimum and maximum constraints. Required if decomp_type is 'CPOD'.
-            The default is None.    
         
         n_sensors : int, optional
             Number of sensors to calculate. Only used if the algorithm is 'gem'.
@@ -761,26 +709,6 @@ class SPR(ROM):
             Minimum distance between sensors. Only used if 'gem' method is selected.
             Default is 0.0.
         
-        scale_type : str, optional
-            Type of scaling. The default is 'std'.
-        
-        select_modes : str, optional
-            Type of mode selection. The default is 'variance'. The available 
-            options are 'variance' or 'number'.
-        
-        n_modes : int or float, optional
-            Parameters that control the amount of modes retained. The default is 
-            99, which represents 99% of the variance. If select_modes='number',
-            n_modes represents the number of modes retained.
-        
-        solver : str, optional
-            Type of solver to use for solving the constrained minimization problem.
-            Refer to the cvxpy documentation. The default is 'ECOS'.
-
-        abstol : float, optional
-            Absolute accuracy for the constrained solver used for CPOD. 
-            Default is 1e-3.
-
         verbose : bool, optional.
             If True, it will output the results of the computation used for the
             gem algorithm. Default is False.
@@ -794,25 +722,19 @@ class SPR(ROM):
         '''
         n = self.X.shape[0]
 
-        X0 = self.scale_data(scale_type)
-        
-        Ur, _, _ = self.decomposition(X0, decomp_type, limits, select_modes, n_modes, 
-                                               solver, abstol, verbose)
-        r = Ur.shape[1]
-        
         if calc_type == 'qr':
             # Calculate the QRCP placement
             if mask is not None:
-                Ur[~mask, :] = 0
-            Q, R, P = la.qr(Ur.T, pivoting=True, mode='economic')
-            s = r
+                self.Ur[~mask, :] = 0
+            Q, R, P = la.qr(self.Ur.T, pivoting=True, mode='economic')
+            s = self.r
             C = np.zeros((s, n))
             for j in range(s):
                 C[j, P[j]] = 1
                 
         elif calc_type == 'gem':
             # Calculate the GEM placement
-            P = self.gem(Ur, n_sensors, mask, d_min, verbose)
+            P = self.gem(self.Ur, n_sensors, mask, d_min, verbose)
             s = P.size
             C = np.zeros((s, n))
             for j in range(s):
@@ -885,11 +807,11 @@ class SPR(ROM):
         
         if cond == True:
             if Theta.shape[0] == Theta.shape[1]:
-                U_theta, S_theta, V_thetat = np.linalg.svd(Theta)
+                _, S_theta, _ = np.linalg.svd(Theta)
                 self.k = S_theta[0]/S_theta[-1]
             else:
                 Theta_pinv = np.linalg.pinv(Theta)
-                U_theta, S_theta, V_thetat = np.linalg.svd(Theta_pinv)
+                _, S_theta, _ = np.linalg.svd(Theta_pinv)
                 self.k = S_theta[0]/S_theta[-1]
             
     def predict(self, y):
@@ -1094,10 +1016,12 @@ if __name__ == '__main__':
     #---------------------------------Sparse sensing--------------------------------------------------
 
     spr = SPR(X_train, n_features, xyz) # Create the spr object
-
+    # Fit the model 
+    spr.fit(select_modes='number', n_modes=5)
+    
     # Compute the optimal measurement matrix using qr decomposition
-    n_sensors = 14
-    C_qr = spr.optimal_placement(select_modes='number', n_modes=n_sensors)
+    n_sensors = 5
+    C_qr = spr.optimal_placement()
     
     # Get the sensors positions and features
     xz_sensors = np.zeros((n_sensors, 4))
@@ -1115,15 +1039,11 @@ if __name__ == '__main__':
     for i in range(n_sensors):
         y_qr[i,2] = np.argmax(C_qr[i,:]) // n_cells
 
-    
-    # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
-    spr.fit(decomp_type='POD', verbose=False, select_modes='number', n_modes=14)
-    
     # features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
     limit_min = np.array([200., 0., 0., 0., 0., 0., 0., 0., 0.])
     limit_max = np.array([3000., 1., 1., 1., 1., 1., 1., 1., 1.])
 
-    spr.train(C_qr, method='COLS', limits=[limit_min, limit_max])
+    spr.train(C_qr, method='OLS', limits=[limit_min, limit_max])
     Ap, Ap_sigma = spr.predict(y_qr)
     Xp = spr.reconstruct(Ap)
 
@@ -1134,3 +1054,26 @@ if __name__ == '__main__':
     plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_cells:(ind+1)*n_cells, 3], 
                     Xp[ind*n_cells:(ind+1)*n_cells, 0]], cbar_label=str_ind)
   
+    # g = cp.Variable(spr.r)
+    # x0 = cp.Parameter(spr.X0.shape[0])
+
+    # limits0 = spr.scale_limits([limit_min, limit_max])
+
+    # objective = cp.Minimize(cp.pnorm(spr.Ur @ g - x0, p=2))
+    # constraints = [spr.Ur @ g >= limits0[0], 
+    #                spr.Ur @ g <= limits0[1]]
+    # problem = cp.Problem(objective, constraints)
+
+    # problem_dict = {'g': g, 'x0': x0, 'problem': problem}
+    # spr.CPOD(problem_dict, solver='CLARABEL', verbose=True)
+
+    # spr.train(C_qr, method='OLS', limits=[limit_min, limit_max])
+    # Ap, Ap_sigma = spr.predict(y_qr)
+    # Xp = spr.reconstruct(Ap)
+
+    # # Select the feature to plot
+    # str_ind = 'OH'
+    # ind = features.index(str_ind)
+
+    # plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_cells:(ind+1)*n_cells, 3], 
+    #                 Xp[ind*n_cells:(ind+1)*n_cells, 0]], cbar_label=str_ind)
