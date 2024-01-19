@@ -1012,8 +1012,10 @@ if __name__ == '__main__':
     Ap, Sigmap = gpr.predict(P_test)
     
     # Reconstruct the high-dimensional state from the POD coefficients
-    # C = np.zeros((10, X_train.shape[0]))
-    Xp = gpr.reconstruct(Ap)
+    Ctot = np.zeros((10, X_train.shape[0]))
+    # Ctot[:, i_f*n_cells:(i_f+1)*n_cells] = C
+    Ctot[:10, :10] = np.eye(10)
+    Xp = gpr.reconstruct(Ap, sampling=Ctot)
     # Select the feature to plot
     str_ind = 'OH'
     ind = features.index(str_ind)
