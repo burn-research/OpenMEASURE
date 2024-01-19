@@ -334,8 +334,8 @@ class GPR(sps.ROM):
         P0 = (P - P_cnt)/P_scl
         return P0    
 
-    def fit(self, scaleX_type='std', scaleP_type='std', select_modes='variance', 
-            n_modes=99, verbose=False, basis=None):
+    def fit(self, scaleX_type='std', scaleP_type='std', axis_cnt=None, axis_scl=None, 
+            select_modes='variance', n_modes=99, verbose=False, basis=None):
         '''
         Fit the GPR model.
         Return the model and likelihood.
@@ -348,6 +348,14 @@ class GPR(sps.ROM):
         scaleP_type : str, optional
             Type of scaling method for the parameters. The default is 'std'.
         
+        axis_cnt : int, optional
+            Axis used to compute the centering coefficient. If None, the centering coefficient
+            is a scalar. Default is None.
+
+        axis_scl : int, optional
+            Axis used to compute the scaling coefficient. If None, the scaling coefficient
+            is a scalar. Default is None.
+
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
             options are 'variance' or 'number'.
@@ -373,7 +381,7 @@ class GPR(sps.ROM):
         self.n_modes = n_modes
         self.verbose = verbose
 
-        self.X0 = self.scale_data(scaleX_type)
+        self.X0 = self.scale_data(scaleX_type, axis_cnt, axis_scl)
         if basis is None:
             Ur, Ar, _ = self.decomposition(self.X0, select_modes, n_modes)
         else:
@@ -1007,15 +1015,12 @@ if __name__ == '__main__':
     gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='MultiTask')
     
     # Calculates the POD coefficients ap and the uncertainty for the test simulations
-    gpr.fit()
+    gpr.fit(scaleX_type='std', axis_cnt=1)
     models, likelihoods = gpr.train(max_iter=1000, verbose=False, lr=0.01)
     Ap, Sigmap = gpr.predict(P_test)
     
     # Reconstruct the high-dimensional state from the POD coefficients
-    Ctot = np.zeros((10, X_train.shape[0]))
-    # Ctot[:, i_f*n_cells:(i_f+1)*n_cells] = C
-    Ctot[:10, :10] = np.eye(10)
-    Xp = gpr.reconstruct(Ap, sampling=Ctot)
+    Xp = gpr.reconstruct(Ap)
     # Select the feature to plot
     str_ind = 'OH'
     ind = features.index(str_ind)
@@ -1034,36 +1039,36 @@ if __name__ == '__main__':
 
     # plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
 
-    # v = cp.Variable((gpr.r,1))
-    # mean = cp.Parameter((gpr.r,1))
-    # cov = cp.Parameter((gpr.r, gpr.r))
-    # objective = cp.Maximize(-cp.matrix_frac(v-mean, cov))
+    v = cp.Variable((gpr.r,1))
+    mean = cp.Parameter((gpr.r,1))
+    cov = cp.Parameter((gpr.r, gpr.r))
+    objective = cp.Maximize(-cp.matrix_frac(v-mean, cov))
 
-    # # features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
-    # limit_min = np.array([200, 0, 0, 0, 0, 0, 0, 0, 0], dtype='float')
-    # limit_max = np.array([3000, 1, 1, 1, 1, 1, 1, 1, 1], dtype='float')
-    # limits0 = gpr.scale_limits([limit_min, limit_max])
+    # features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
+    limit_min = np.array([200, 0, 0, 0, 0, 0, 0, 0, 0], dtype='float')
+    limit_max = np.array([3000, 1, 1, 1, 1, 1, 1, 1, 1], dtype='float')
+    limits0 = gpr.scale_limits([limit_min, limit_max])
 
-    # x0 = cp.matmul(gpr.Ur, cp.multiply(gpr.Sigma_r[:, np.newaxis], v))
-    # constraints = [x0 >= limits0[0][:, np.newaxis], 
-    #                x0 <= limits0[1][:, np.newaxis]]
+    x0 = cp.matmul(gpr.Ur, cp.multiply(gpr.Sigma_r[:, np.newaxis], v))
+    constraints = [x0 >= limits0[0][:, np.newaxis], 
+                   x0 <= limits0[1][:, np.newaxis]]
 
-    # problem = cp.Problem(objective, constraints)
-    # problem_dict = {'problem': problem,
-    #                 'v': v,
-    #                 'mean': mean,
-    #                 'cov': cov}
+    problem = cp.Problem(objective, constraints)
+    problem_dict = {'problem': problem,
+                    'v': v,
+                    'mean': mean,
+                    'cov': cov}
 
-    # Ap, Sigmap = gpr.predict(P_test, problem_dict, solver='CLARABEL', verbose=True)
+    Ap, Sigmap = gpr.predict(P_test, problem_dict, solver='CLARABEL', verbose=True)
     
-    # # Reconstruct the high-dimensional state from the POD coefficients
-    # Xp = gpr.reconstruct(Ap)
+    # Reconstruct the high-dimensional state from the POD coefficients
+    Xp = gpr.reconstruct(Ap)
 
-    # # Select the feature to plot
-    # str_ind = 'OH'
-    # ind = features.index(str_ind)
+    # Select the feature to plot
+    str_ind = 'OH'
+    ind = features.index(str_ind)
 
-    # x_test = X_test[ind*n_cells:(ind+1)*n_cells,3]
-    # xp_test = Xp[ind*n_cells:(ind+1)*n_cells, 3]
+    x_test = X_test[ind*n_cells:(ind+1)*n_cells,3]
+    xp_test = Xp[ind*n_cells:(ind+1)*n_cells, 3]
 
-    # plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
+    plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)

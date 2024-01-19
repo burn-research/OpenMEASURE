@@ -81,7 +81,7 @@ class ROM():
             raise Exception('The number of rows of X is not a multiple of n_features')
             exit()
 
-    def scale_data(self, scale_type='std'):
+    def scale_data(self, scale_type='std', axis_cnt=None, axis_scl=None):
         '''
         Return the scaled data matrix. The default is to scale the data to 
         unitary variance.
@@ -93,6 +93,15 @@ class ROM():
             ['std', 'none', 'pareto', 'vast', 'range', 'level', 'max', 'variance',
              'median', 'poisson', 'vast_2', 'vast_3', 'vast_4', 'l2-norm']
 
+        axis_cnt : int, optional
+            Axis used to compute the centering coefficient. If None, the centering coefficient
+            is a scalar. Default is None.
+
+        axis_scl : int, optional
+            Axis used to compute the scaling coefficient. If None, the scaling coefficient
+            is a scalar. Default is None.
+        
+
         Returns
         -------
         X0 : numpy array
@@ -100,62 +109,62 @@ class ROM():
 
         '''
         
-        X_cnt = np.zeros_like(self.X)
-        X_scl = np.zeros_like(self.X)
+        X_cnt = np.zeros((self.X.shape[0], 1))
+        X_scl = np.zeros((self.X.shape[0], 1))
         
         for i in range(self.n_features):
             x = self.X[i*self.n_points:(i+1)*self.n_points, :]
             
-            X_cnt[i*self.n_points:(i+1)*self.n_points, :] = np.average(x)
+            X_cnt[i*self.n_points:(i+1)*self.n_points, 0] = np.average(x, axis=axis_cnt)
             
             if scale_type == 'std':
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.std(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.std(x, axis=axis_scl)
             
             elif scale_type == 'none':
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = 1.
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = 1.
             
             elif scale_type == 'pareto':
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.sqrt(np.std(x))
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.sqrt(np.std(x, axis=axis_scl))
             
             elif scale_type == 'vast':
-                scl_factor = np.std(x)**2/np.average(x)
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+                scl_factor = np.std(x, axis=axis_scl)**2/np.average(x, axis=axis_scl)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             elif scale_type == 'range':
-                scl_factor = np.max(x) - np.min(x)
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+                scl_factor = np.max(x, axis=axis_scl) - np.min(x, axis=axis_scl)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
                 
             elif scale_type == 'level':
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.average(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.average(x, axis=axis_scl)
                 
             elif scale_type == 'max':
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.max(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.max(x, axis=axis_scl)
             
             elif scale_type == 'variance':
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.var(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.var(x, axis=axis_scl)
             
             elif scale_type == 'median':
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.median(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.median(x, axis=axis_scl)
             
             elif scale_type == 'poisson':
-                scl_factor = np.sqrt(np.average(x))
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+                scl_factor = np.sqrt(np.average(x, axis=axis_scl))
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             elif scale_type == 'vast_2':
-                scl_factor = (np.std(x)**2 * kurtosis(x, None)**2)/np.average(x)
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+                scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/np.average(x, axis=axis_scl)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             elif scale_type == 'vast_3':
-                scl_factor = (np.std(x)**2 * kurtosis(x, None)**2)/np.max(x)
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+                scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/np.max(x, axis=axis_scl)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             elif scale_type == 'vast_4':
-                scl_factor = (np.std(x)**2 * kurtosis(x, None)**2)/(np.max(x)-np.min(x))
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+                scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/(np.max(x, axis=axis_scl)-np.min(x, axis=axis_scl))
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             elif scale_type == 'l2-norm':
-                scl_factor = np.linalg.norm(x.flatten())
-                X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
+                scl_factor = np.linalg.norm(x, axis=axis_scl)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             else:
                 raise NotImplementedError('The scaling method selected has not been '\
@@ -456,7 +465,7 @@ class ROM():
         self.Ar = Gr 
         self.Vr = Vr     
 
-    def fit(self, scale_type='std', select_modes='variance', n_modes=99, basis=None):
+    def fit(self, scale_type='std', axis_cnt=None, axis_scl=None, select_modes='variance', n_modes=99, basis=None):
         '''
         Fit the taylored basis to the sparse sensing model.
 
@@ -466,6 +475,14 @@ class ROM():
             Type of scaling method. The default is 'std'. Standard scaling is the 
             only scaling implemented for the 'COLS' method.
 
+        axis_cnt : int, optional
+            Axis used to compute the centering coefficient. If None, the centering coefficient
+            is a scalar. Default is None.
+
+        axis_scl : int, optional
+            Axis used to compute the scaling coefficient. If None, the scaling coefficient
+            is a scalar. Default is None.
+        
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
             options are 'variance' or 'number'.
@@ -481,7 +498,7 @@ class ROM():
         '''
         
         self.scale_type = scale_type
-        self.X0 = self.scale_data(scale_type)
+        self.X0 = self.scale_data(scale_type, axis_cnt, axis_scl)
         if basis is None:
             Ur, Ar, _ = self.decomposition(self.X0, select_modes, n_modes)
         else:
@@ -1017,7 +1034,8 @@ if __name__ == '__main__':
 
     spr = SPR(X_train, n_features, xyz) # Create the spr object
     # Fit the model 
-    spr.fit(select_modes='number', n_modes=5)
+    spr.fit(scale_type='std', select_modes='number', n_modes=5, axis_cnt=1)
+    # spr.fit(select_modes='number', n_modes=5)
     
     # Compute the optimal measurement matrix using qr decomposition
     n_sensors = 5
