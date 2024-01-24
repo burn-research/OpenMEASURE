@@ -110,64 +110,123 @@ class ROM():
         '''
         
         X_cnt = np.zeros((self.X.shape[0], 1))
+        
         X_scl = np.zeros((self.X.shape[0], 1))
         
-        for i in range(self.n_features):
-            x = self.X[i*self.n_points:(i+1)*self.n_points, :]
+        if axis_scl == 0:
+            X_scl = np.zeros((self.X.shape[0], self.X.shape[1]))
+            for i in range(self.n_features):
+                x = self.X[i*self.n_points:(i+1)*self.n_points, :]
             
-            X_cnt[i*self.n_points:(i+1)*self.n_points, 0] = np.average(x, axis=axis_cnt)
+                X_cnt[i*self.n_points:(i+1)*self.n_points, 0] = np.mean(x, axis=axis_cnt)
             
-            if scale_type == 'std':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.std(x, axis=axis_scl)
+                if scale_type == 'std':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.std(x, axis=axis_scl)
+
+                 elif scale_type == 'none':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = 1.
             
-            elif scale_type == 'none':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = 1.
+                elif scale_type == 'pareto':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.sqrt(np.std(x, axis=axis_scl))
             
-            elif scale_type == 'pareto':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.sqrt(np.std(x, axis=axis_scl))
+                elif scale_type == 'vast':
+                    scl_factor = np.std(x, axis=axis_scl)**2/np.average(x, axis=axis_scl)
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
             
-            elif scale_type == 'vast':
-                scl_factor = np.std(x, axis=axis_scl)**2/np.average(x, axis=axis_scl)
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
-            
-            elif scale_type == 'range':
-                scl_factor = np.max(x, axis=axis_scl) - np.min(x, axis=axis_scl)
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+                elif scale_type == 'range':
+                    scl_factor = np.max(x, axis=axis_scl) - np.min(x, axis=axis_scl)
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
                 
-            elif scale_type == 'level':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.average(x, axis=axis_scl)
+                elif scale_type == 'level':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.average(x, axis=axis_scl)
                 
-            elif scale_type == 'max':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.max(x, axis=axis_scl)
+                elif scale_type == 'max':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.max(x, axis=axis_scl)
             
-            elif scale_type == 'variance':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.var(x, axis=axis_scl)
+                elif scale_type == 'variance':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.var(x, axis=axis_scl)
             
-            elif scale_type == 'median':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.median(x, axis=axis_scl)
+                elif scale_type == 'median':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = np.median(x, axis=axis_scl)
             
-            elif scale_type == 'poisson':
-                scl_factor = np.sqrt(np.average(x, axis=axis_scl))
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+                elif scale_type == 'poisson':
+                    scl_factor = np.sqrt(np.average(x, axis=axis_scl))
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
             
-            elif scale_type == 'vast_2':
-                scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/np.average(x, axis=axis_scl)
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+                elif scale_type == 'vast_2':
+                    scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/np.average(x, axis=axis_scl)
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
             
-            elif scale_type == 'vast_3':
-                scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/np.max(x, axis=axis_scl)
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+                elif scale_type == 'vast_3':
+                    scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/np.max(x, axis=axis_scl)
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
             
-            elif scale_type == 'vast_4':
-                scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/(np.max(x, axis=axis_scl)-np.min(x, axis=axis_scl))
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+                elif scale_type == 'vast_4':
+                    scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/(np.max(x, axis=axis_scl)-np.min(x, axis=axis_scl))
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
             
-            elif scale_type == 'l2-norm':
-                scl_factor = np.linalg.norm(x, axis=axis_scl)
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+                elif scale_type == 'l2-norm':
+                    scl_factor = np.linalg.norm(x, axis=axis_scl)
+                    X_scl[i*self.n_points:(i+1)*self.n_points, :] = scl_factor
             
-            else:
-                raise NotImplementedError('The scaling method selected has not been '\
+                else:
+                    raise NotImplementedError('The scaling method selected has not been '\
+                                      'implemented yet')
+        else: 
+            X_scl = np.zeros((self.X.shape[0], 1))
+            for i in range(self.n_features):
+                x = self.X[i*self.n_points:(i+1)*self.n_points, :]
+                X_cnt[i*self.n_points:(i+1)*self.n_points, 0] = np.mean(x, axis=axis_cnt)
+                if scale_type == 'std':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.std(x, axis=axis_scl)
+                elif scale_type == 'none':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = 1.
+            
+                elif scale_type == 'pareto':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.sqrt(np.std(x, axis=axis_scl))
+            
+                elif scale_type == 'vast':
+                    scl_factor = np.std(x, axis=axis_scl)**2/np.average(x, axis=axis_scl)
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+            
+                elif scale_type == 'range':
+                    scl_factor = np.max(x, axis=axis_scl) - np.min(x, axis=axis_scl)
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+                
+                elif scale_type == 'level':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.average(x, axis=axis_scl)
+                
+                elif scale_type == 'max':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.max(x, axis=axis_scl)
+            
+                elif scale_type == 'variance':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.var(x, axis=axis_scl)
+            
+                elif scale_type == 'median':
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.median(x, axis=axis_scl)
+            
+                elif scale_type == 'poisson':
+                    scl_factor = np.sqrt(np.average(x, axis=axis_scl))
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+            
+                elif scale_type == 'vast_2':
+                    scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/np.average(x, axis=axis_scl)
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+            
+                elif scale_type == 'vast_3':
+                    scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/np.max(x, axis=axis_scl)
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+            
+                elif scale_type == 'vast_4':
+                    scl_factor = (np.std(x, axis=axis_scl)**2 * kurtosis(x, axis=axis_scl)**2)/(np.max(x, axis=axis_scl)-np.min(x, axis=axis_scl))
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+            
+                elif scale_type == 'l2-norm':
+                    scl_factor = np.linalg.norm(x, axis=axis_scl)
+                    X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
+            
+                else:
+                    raise NotImplementedError('The scaling method selected has not been '\
                                       'implemented yet')
         self.X_cnt = X_cnt
         self.X_scl = X_scl
