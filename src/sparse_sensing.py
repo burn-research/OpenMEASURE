@@ -572,21 +572,17 @@ class SPR(ROM):
         Returns
         -------
         y0: numpy array
-            The scaled measurement vector, size (s,3).
+            The scaled measurement vector, size (s,2).
 
         '''
         
         y0 = np.zeros((y.shape[0],2))
-        cnt_vector = np.zeros((self.n_features))
-        scl_vector = np.zeros((self.n_features))
         
-        for i in range(self.n_features):
-            cnt_vector[i] = self.X_cnt[i*self.n_points,0]
-            scl_vector[i] = self.X_scl[i*self.n_points,0]
-        
-        for i in range(y0.shape[0]):
-            y0[i,0] = (y[i,0] - cnt_vector[int(y[i,2])]) / scl_vector[int(y[i,2])]
-            y0[i,1] = y[i,1] / scl_vector[int(y[i,2])]
+        cnt_vector = self.C @ self.X_cnt[:,0]
+        scl_vector = self.C @ self.X_scl[:,0]
+    
+        y0[:,0] = (y[:,0] - cnt_vector) / scl_vector
+        y0[:,1] = y[:,1] / scl_vector
         
         return y0
 
@@ -1034,7 +1030,7 @@ if __name__ == '__main__':
 
     spr = SPR(X_train, n_features, xyz) # Create the spr object
     # Fit the model 
-    spr.fit(scale_type='std', select_modes='number', n_modes=5, axis_cnt=1)
+    spr.fit(scale_type='std', select_modes='number', n_modes=5, axis_cnt=1, axis_scl=1)
     # spr.fit(select_modes='number', n_modes=5)
     
     # Compute the optimal measurement matrix using qr decomposition
