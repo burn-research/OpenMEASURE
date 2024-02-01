@@ -158,7 +158,8 @@ spr = SPR(X_train, n_features, xyz) # Create the spr object
 
 # Compute the optimal measurement matrix using qr decomposition
 n_sensors = 14
-C_qr = spr.optimal_placement(select_modes='number', n_modes=n_sensors)
+spr.fit(select_modes='number', n_modes=n_sensors)
+C_qr = spr.optimal_placement()
 
 # Get the sensors positions and features
 xz_sensors = np.zeros((n_sensors, 4))
@@ -177,7 +178,7 @@ for i in range(n_sensors):
     y_qr[i,2] = np.argmax(C_qr[i,:]) // n_cells
 
 # Fit the model and predict the low-dim vector (ap) and the high-dim solution (xp)
-spr.fit(C_qr)
+spr.train(C_qr)
 ap, sigmap = spr.predict(y_qr)
 xp = spr.reconstruct(ap)
 
@@ -191,9 +192,10 @@ plot_contours_tri(xz[:,0], xz[:,1], [X_test[ind*n_cells:(ind+1)*n_cells, 3],
 #------------------------------------GPR ROM--------------------------------------------------
 # Create the gpr object
 gpr = GPR(X_train, n_features, xyz, P_train)
+gpr.fit()
 
 # Calculates the POD coefficients ap and the uncertainty for the test simulations
-model, lh = gpr.fit(verbose=True)
+model, lh = gpr.train(verbose=True)
 Ap, Sigmap = gpr.predict(P_test)
 
 # Reconstruct the high-dimensional state from the POD coefficients
