@@ -356,6 +356,10 @@ class GPR(sps.ROM):
             Axis used to compute the scaling coefficient. If None, the scaling coefficient
             is a scalar. Default is None.
 
+        select_apros : str, optional
+            Type of POD approaches selection. The default is 'SVD'. The available 
+            options are 'SVD' or 'PCA'.
+
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
             options are 'variance' or 'number'.
@@ -377,13 +381,14 @@ class GPR(sps.ROM):
         
         self.scaleX_type = scaleX_type
         self.scaleP_type = scaleP_type
+        self.select_apros = select_apros
         self.select_modes = select_modes
         self.n_modes = n_modes
         self.verbose = verbose
 
         self.X0 = self.scale_data(scaleX_type, axis_cnt, axis_scl)
         if basis is None:
-            Ur, Ar, _ = self.decomposition(self.X0, select_modes, n_modes)
+            Ur, Ar, _ = self.decomposition(self.X0, select_apros, select_modes, n_modes)
         else:
             Ur = basis[0]
             Ar = basis[1]
