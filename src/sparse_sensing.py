@@ -304,7 +304,7 @@ class ROM():
         else:
             return x
 
-    def decomposition(self, X0, select_modes='variance', n_modes=99):
+    def decomposition(self, X0, select_apros='SVD',  select_modes='variance', n_modes=99):
         '''
         Return the taylored basis and the amount of variance of the modes.
 
@@ -313,6 +313,9 @@ class ROM():
         X0 : numpy array
             The scaled data matrix to be decomposed, size (n,p).
         
+        select_apros: str, optional
+            Method of decomposition: SVD or PCA.
+
         select_modes : str, optional
             Method of modes selection.
         
@@ -333,14 +336,26 @@ class ROM():
             Array containing the explained variance of the modes, size (p,) or (r,).
 
         '''
-        # Compute the SVD of the scaled dataset
-        U, S, Vt = np.linalg.svd(X0, full_matrices=False)
-        A = np.matmul(np.diag(S), Vt).T
-        L = S**2    # Compute the eigenvalues
-        exp_variance = 100*np.cumsum(L)/np.sum(L)
-        Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
-        r = Ar.shape[1]
+        if select_apros == "PCA":
+            # Compute the PCA of the scaled dataset
+            pca = PCA(n_components=n_modes) # we select all the features for now
+            pca.fit(X0)
+            variance_ratio = pca.explained_variance_ratio_ * 100
+            exp_variance = np.cumsum(variance_ratio)
+            Ar = pca.components_.T
+            Ur = X0 @ Ar
+            r = Ar.shape[1]
+            #return Ur, Ar, exp_variance[:r]
 
+        else:
+            # Compute the SVD of the scaled dataset
+            U, S, Vt = np.linalg.svd(X0, full_matrices=False)
+            A = np.matmul(np.diag(S), Vt).T
+            L = S**2    # Compute the eigenvalues
+            exp_variance = 100*np.cumsum(L)/np.sum(L)
+            Ur, Ar = self.reduction(U, A, exp_variance, select_modes, n_modes)
+            r = Ar.shape[1]
+            
         return Ur, Ar, exp_variance[:r]
                 
     def reduction(self, U, A, exp_variance, select_modes, n_modes):
