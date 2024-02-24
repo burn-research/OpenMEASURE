@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "OpenMEASURE"
+version = "0.3.6"
+authors = [
+  { name="Alberto Procacci", email="alberto.procacci@ulb.be" },
+]
+description = "Python package for soft sensing applications"
+dependencies = [
+  'numpy>=1.24.2', 
+  'scipy>=1.10.1', 
+  'gpytorch>=1.9.1', 
+  'cvxpy>=1.3.1', 
+  'openmdao>=3.15.0', 
+  'pyvista>=0.41.1',
+]
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/burn_research/OpenMEASURE"

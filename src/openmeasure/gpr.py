@@ -18,7 +18,7 @@ from scipy.stats import kurtosis
 from gpytorch.likelihoods import MultitaskGaussianLikelihood
 from gpytorch.distributions import MultitaskMultivariateNormal, MultivariateNormal
 from gpytorch.mlls import ExactMarginalLogLikelihood
-import sparse_sensing as sps
+from .sparse_sensing import ROM
 import cvxpy as cp
 
 class ExactGPModel(gpytorch.models.ExactGP):
@@ -162,7 +162,7 @@ class PIMultitaskGPModel(gpytorch.models.ExactGP):
         return MultitaskMultivariateNormal.from_batch_mvn(MultivariateNormal(mean_x, 
                                                                              kernel_x))
 
-class GPR(sps.ROM):
+class GPR(ROM):
     '''
     Class used for building a GPR-based ROM.
     
@@ -334,11 +334,10 @@ class GPR(sps.ROM):
         P0 = (P - P_cnt)/P_scl
         return P0    
 
-    def fit(self, scaleX_type='std', scaleP_type='std', axis_cnt=None, axis_scl=None, 
+    def fit(self, scaleX_type='std', scaleP_type='std', axis_cnt=1, 
             select_modes='variance', n_modes=99, verbose=False, basis=None):
         '''
         Fit the GPR model.
-        Return the model and likelihood.
 
         Parameters
         ----------
@@ -350,11 +349,7 @@ class GPR(sps.ROM):
         
         axis_cnt : int, optional
             Axis used to compute the centering coefficient. If None, the centering coefficient
-            is a scalar. Default is None.
-
-        axis_scl : int, optional
-            Axis used to compute the scaling coefficient. If None, the scaling coefficient
-            is a scalar. Default is None.
+            is a scalar. Default is 1.
 
         select_modes : str, optional
             Type of mode selection. The default is 'variance'. The available 
@@ -381,7 +376,7 @@ class GPR(sps.ROM):
         self.n_modes = n_modes
         self.verbose = verbose
 
-        self.X0 = self.scale_data(scaleX_type, axis_cnt, axis_scl)
+        self.X0 = self.scale_data(scaleX_type, axis_cnt)
         if basis is None:
             Ur, Ar, _ = self.decomposition(self.X0, select_modes, n_modes)
         else:
@@ -892,183 +887,5 @@ class PIGPR(GPR):
             Vr_sigma = output.stddev.detach().numpy()
 
         return model, likelihood, Vr_sigma
-
-
-if __name__ == '__main__':
-    import matplotlib as mpl
-    import matplotlib.pyplot as plt
-    import matplotlib.tri as tri
-
-
-    # Replace this with the path where you saved the data directory
-    path = '../data/ROM/'
-
-    # This is a n x m matrix where n = 165258 is the number of cells times the number of features
-    # and m = 41 is the number of simulations.
-    X_train = np.load(path + 'X_2D_train.npy')
-
-    # This is a n x 4 matrix containing the 4 testing simulations
-    X_test = np.load(path + 'X_2D_test.npy')
-
-    features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
-    n_features = len(features)
-
-    # This is the file containing the x,z positions of the cells
-    xz = np.load(path + 'xz.npy')
-    n_cells = xz.shape[0]
     
-    # Create the x,y,z array
-    xyz = np.zeros((n_cells, 3))
-    xyz[:,0] = xz[:,0]
-    xyz[:,2] = xz[:,1]
-
-    # This reads the files containing the parameters (D, H2, phi) with which 
-    # the simulation were computed
-    P_train = np.genfromtxt(path + 'parameters_train.csv', delimiter=',', skip_header=1)
-    P_test = np.genfromtxt(path + 'parameters_test.csv', delimiter=',', skip_header=1)
-
-    # Load the outline the mesh (for plotting)
-    mesh_outline = np.genfromtxt(path + 'mesh_outline.csv', delimiter=',', skip_header=1)
-
-    #---------------------------------Plotting utilities--------------------------------------------------
-    def sample_cmap(x):
-        return plt.cm.jet((np.clip(x,0,1)))
-
-    def plot_sensors(xz_sensors, features, mesh_outline):
-        fig, ax = plt.subplots(figsize=(4, 4))
-        ax.plot(mesh_outline[:,0], mesh_outline[:,1], c='k', lw=0.5, zorder=1)
-        
-        features_unique = np.unique(xz_sensors[:,2])
-        colors = np.zeros((features_unique.size,4))
-        for i in range(colors.shape[0]):
-            colors[i,:] = sample_cmap(features_unique[i]/len(features))
-            
-        for i, f in enumerate(features_unique):
-            mask = xz_sensors[:,2] == f
-            ax.scatter(xz_sensors[:,0][mask], xz_sensors[:,1][mask], color=colors[i,:], 
-                       marker='x', s=15, lw=0.5, label=features[int(f)], zorder=2)
-
-        
-        ax.set_xlabel('$x (\mathrm{m})$', fontsize=8)
-        ax.set_ylabel('$z (\mathrm{m})$', fontsize=8)
-        eps = 1e-2
-        ax.set_xlim(-eps, 0.35)
-        ax.set_ylim(-0.15,0.7+eps)
-        ax.set_aspect('equal')
-        ax.legend(fontsize=8, frameon=False, loc='center right')
-        ax.xaxis.tick_top()
-        ax.xaxis.set_label_position('top')
-        wid = 0.3
-        ax.xaxis.set_tick_params(width=wid)
-        ax.yaxis.set_tick_params(width=wid)
-        ax.set_xticks([0., 0.18, 0.35])
-        ax.tick_params(axis='both', which='major', labelsize=8)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['bottom'].set_visible(False)
-        ax.spines['left'].set_visible(False)
-        
-        plt.show()
-
-    def plot_contours_tri(x, y, zs, cbar_label=''):
-        triang = tri.Triangulation(x, y)
-        triang_mirror = tri.Triangulation(-x, y)
-
-        fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(6,6))
-        
-        z_min = np.min(zs)
-        z_max = np.max(zs)
-       
-        n_levels = 12
-        levels = np.linspace(z_min, z_max, n_levels)
-        cmap_name = 'inferno'
-        titles=['Original CFD','Predicted']
-        
-        for i, ax in enumerate(axs):
-            if i == 0:
-                ax.tricontourf(triang_mirror, zs[i], levels, vmin=z_min, vmax=z_max, cmap=cmap_name)
-            else:
-                ax.tricontourf(triang, zs[i], levels, vmin=z_min, vmax=z_max, cmap=cmap_name)
-                ax.tick_params(axis='y', which='both', left=False, right=False, labelleft=False) 
-            
-            ax.set_aspect('equal')
-            ax.set_title(titles[i])
-            ax.set_xlabel('$x (\mathrm{m})$')
-            if i == 0:
-                ax.set_ylabel('$z (\mathrm{m})$')
-        
-        fig.subplots_adjust(bottom=0., top=1., left=0., right=0.85, wspace=0.02, hspace=0.02)
-        start = axs[1].get_position().bounds[1]
-        height = axs[1].get_position().bounds[3]
-        
-        cb_ax = fig.add_axes([0.9, start, 0.05, height])
-        cmap = mpl.cm.get_cmap(cmap_name)
-        norm = mpl.colors.Normalize(vmin=z_min, vmax=z_max)
-        
-        fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cb_ax, 
-                    orientation='vertical', label=cbar_label)
-        
-        plt.show()
-    #------------------------------------GPR ROM--------------------------------------------------
-    # Create the gpr object
     
-    gpr = GPR(X_train, n_features, xyz, P_train, gpr_type='MultiTask')
-    
-    # Calculates the POD coefficients ap and the uncertainty for the test simulations
-    gpr.fit(scaleX_type='std', axis_cnt=1)
-    models, likelihoods = gpr.train(max_iter=1000, verbose=False, lr=0.01)
-    Ap, Sigmap = gpr.predict(P_test)
-    
-    # Reconstruct the high-dimensional state from the POD coefficients
-    Xp = gpr.reconstruct(Ap)
-    # Select the feature to plot
-    str_ind = 'OH'
-    ind = features.index(str_ind)
-
-    x_test = X_test[ind*n_cells:(ind+1)*n_cells,3]
-    xp_test = Xp[ind*n_cells:(ind+1)*n_cells, 3]
-
-    # plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
-
-    # gpr.update(P_test, Ap, Sigmap, retrain=True, verbose=True)
-    # Ap, Sigmap = gpr.predict(P_test)
-    # Xp = gpr.reconstruct(Ap)
-
-    # x_test = X_test[ind*n_cells:(ind+1)*n_cells,3]
-    # xp_test = Xp[ind*n_cells:(ind+1)*n_cells, 3]
-
-    # plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
-
-    v = cp.Variable((gpr.r,1))
-    mean = cp.Parameter((gpr.r,1))
-    cov = cp.Parameter((gpr.r, gpr.r))
-    objective = cp.Maximize(-cp.matrix_frac(v-mean, cov))
-
-    # features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO', 'NOx']
-    limit_min = np.array([200, 0, 0, 0, 0, 0, 0, 0, 0], dtype='float')
-    limit_max = np.array([3000, 1, 1, 1, 1, 1, 1, 1, 1], dtype='float')
-    limits0 = gpr.scale_limits([limit_min, limit_max])
-
-    x0 = cp.matmul(gpr.Ur, cp.multiply(gpr.Sigma_r[:, np.newaxis], v))
-    constraints = [x0 >= limits0[0][:, np.newaxis], 
-                   x0 <= limits0[1][:, np.newaxis]]
-
-    problem = cp.Problem(objective, constraints)
-    problem_dict = {'problem': problem,
-                    'v': v,
-                    'mean': mean,
-                    'cov': cov}
-
-    Ap, Sigmap = gpr.predict(P_test, problem_dict, solver='CLARABEL', verbose=True)
-    
-    # Reconstruct the high-dimensional state from the POD coefficients
-    Xp = gpr.reconstruct(Ap)
-
-    # Select the feature to plot
-    str_ind = 'OH'
-    ind = features.index(str_ind)
-
-    x_test = X_test[ind*n_cells:(ind+1)*n_cells,3]
-    xp_test = Xp[ind*n_cells:(ind+1)*n_cells, 3]
-
-    plot_contours_tri(xz[:,0], xz[:,1], [x_test, xp_test], cbar_label=str_ind)
