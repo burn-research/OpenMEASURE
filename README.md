@@ -36,8 +36,8 @@ The following packages will be installed:
 
 ```python
 import numpy as np
-from gpr import GPR
-from sparse_sensing import SPR
+from openmeasure.gpr import GPR
+from openmeasure.sparse_sensing import SPR
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.tri as tri
@@ -144,7 +144,7 @@ def plot_contours_tri(x, y, zs, cbar_label=''):
     height = axs[1].get_position().bounds[3]
     
     cb_ax = fig.add_axes([0.9, start, 0.05, height])
-    cmap = mpl.cm.get_cmap(cmap_name, n_levels)
+    cmap = mpl.colormaps[cmap_name]
     norm = mpl.colors.Normalize(vmin=z_min, vmax=z_max)
     
     fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cb_ax, 

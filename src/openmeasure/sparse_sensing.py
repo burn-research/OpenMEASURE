@@ -198,10 +198,10 @@ class ROM():
                         /self.X_scl[i*self.n_points:(i+1)*self.n_points, 0])
                 
                 # This is done for numerical stability reasons
-                if np.min(temp) < -100:
-                    temp = -100
-                elif np.max(temp) > 100:
-                    temp = 100
+                if np.min(temp) < -1000:
+                    temp = -1000
+                elif np.max(temp) > 1000:
+                    temp = 1000
             
                 limit0[i*self.n_points:(i+1)*self.n_points] = temp
 
@@ -316,13 +316,13 @@ class ROM():
                 raise ValueError('The parameter n_modes is outside the[0-100] range.')
                 
             # The r-order truncation is selected based on the amount of variance recovered
-            r = 1
-            while exp_variance[r-1] < n_modes:
-                r += 1
-
             if n_modes == 100:
                 r = A.shape[1]
-                
+            else:
+                r = 1
+                while exp_variance[r-1] < n_modes:
+                    r += 1
+    
         elif select_modes == 'number':
             if not type(n_modes) is int:
                 raise TypeError('The parameter n_modes is not an integer.')
@@ -570,12 +570,17 @@ class SPR(ROM):
         
         y0 = np.zeros((y.shape[0],2))
         
-        cnt_vector = self.C @ self.X_cnt[:,0]
-        scl_vector = self.C @ self.X_scl[:,0]
-    
+        cnt_vector = self.C.dot(self.X_cnt[:,0])
+        
+        # scl_vector = self.C @ self.X_scl[:,0]
+        scl_vector = self.X_scl[y[:,2].astype('int')*self.n_points, 0]
+        
         y0[:,0] = (y[:,0] - cnt_vector) / scl_vector
         y0[:,1] = y[:,1] / scl_vector
         
+        self.cnt_vector = cnt_vector
+        self.scl_vector = scl_vector
+
         return y0
 
     def gem(self, Ur, n_sensors, mask, d_min, verbose):

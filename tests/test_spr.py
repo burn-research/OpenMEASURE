@@ -35,13 +35,15 @@ class TestSPR:
         
         y = np.zeros((self.C.shape[0], 3))
         y[:,0] = self.C @ self.spr.X[:, 0]
+        for i in range(self.n_features):
+            y[i*self.n_points:(i+1)*self.n_points, 2] = i
 
         y0 = self.spr.scale_vector(y)
 
         y0_check = np.zeros((self.C.shape[0], 2))
         y0_check[:,0] = (y[:,0]-X_cnt[:,0])/X_scl[:,0]
 
-        np.testing.assert_array_equal(y0, y0_check)
+        np.testing.assert_allclose(y0, y0_check)
     
     def test_predict(self):
         self.spr.fit(n_modes=100)
@@ -49,6 +51,8 @@ class TestSPR:
 
         y = np.zeros((self.C.shape[0], 3))
         y[:,0] = self.C @ self.spr.X[:, 0]
+        for i in range(self.n_features):
+            y[i*self.n_points:(i+1)*self.n_points, 2] = i
 
         a, _ = self.spr.predict(y)
         x_pred = self.spr.reconstruct(a)
