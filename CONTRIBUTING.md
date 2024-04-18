@@ -16,7 +16,7 @@ Thank you for taking your time to contribute to OpenMEASURE! This document will 
 
 - Remember to document and annotate your code.
 
-- Run the tests using `pytest`. 
+- Run the tests using `pytest`. To do this, first install it via `pip install pytest`, then run the command `pytest` on the terminal from the directory `tests`.
 
 - Once you pass all the tests, update the documentation in `docs/`.
 

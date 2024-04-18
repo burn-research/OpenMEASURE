@@ -13,7 +13,7 @@ MODULE: cokriging.py
 
 #%%
 import numpy as np
-import sparse_sensing as sps
+from .sparse_sensing import ROM
 from openmdao.surrogate_models.multifi_cokriging import MultiFiCoKriging
 
 class CoKriging():
@@ -53,8 +53,8 @@ class CoKriging():
             exit()
 
     def manifold_alignment(self, select_modes='variance', n_modes_hf=99, n_modes_lf=99):
-        self.rom_hf = sps.ROM(self.Y_train_hf_l, self.n_features, self.xyz_hf)   # Create ROM object for scaling
-        self.rom_lf = sps.ROM(np.concatenate((self.Y_train_lf_l, self.Y_train_lf_u), axis=1), self.n_features, self.xyz_lf)
+        self.rom_hf = ROM(self.Y_train_hf_l, self.n_features, self.xyz_hf)   # Create ROM object for scaling
+        self.rom_lf = ROM(np.concatenate((self.Y_train_lf_l, self.Y_train_lf_u), axis=1), self.n_features, self.xyz_lf)
 
         X0_hf = self.rom_hf.scale_data(self.scale_type) # Scale data
         X0_lf = self.rom_lf.scale_data(self.scale_type)
@@ -142,163 +142,4 @@ class CoKriging():
             Y_mse[:,i] = self.rom_hf.unscale_data(Y0_mse[:,i])
             
         return Y_pred, Y_mse
-    
-#%%
-if __name__ == '__main__':
-    import numpy as np
-    import pandas as pd
-    import matplotlib as mpl
-    import matplotlib.pyplot as plt
-    import matplotlib.tri as tri
-    from shapely.geometry import Polygon
-    
-    path_data = '/Users/alberto/Documents/Research/Co-kriging/data'
-
-    hf_data = np.load(f'{path_data}/hf_data.npy')
-    lf_data = np.load(f'{path_data}/lf_data.npy')
-    xyzi_hf = np.load(f'{path_data}/xyzi_hf.npy')
-    xyzi_lf = np.load(f'{path_data}/xyzi_lf.npy')
-    par = np.load(f'{path_data}/parameters.npy')
-
-    test_id = [0, 21, 27, 38]
-    train_par = np.delete(par, test_id, axis=0)
-    test_par = par[test_id,:]
-
-    n_cells_hf = xyzi_hf.shape[0]
-    n_cells_lf = xyzi_lf.shape[0]
-
-    features = ['T', 'CH4', 'O2', 'CO2', 'H2O', 'H2', 'OH', 'CO']
-    n_features = len(features)
-
-    Y_hf_train = np.delete(hf_data, test_id, axis=1)
-    Y_hf_test = hf_data[:, test_id]
-
-    Y_lf_train = np.delete(lf_data, test_id, axis=1)
-    Y_lf_test = lf_data[:, test_id]
-
-    n_subset = 41
-    np.random.seed(1)
-    r_index = np.linspace(0, Y_hf_train.shape[1]-1, Y_hf_train.shape[1], dtype=np.int)
-    np.random.shuffle(r_index)
-
-    X_train_l = train_par[r_index[:n_subset], :]
-    X_train_u = train_par[r_index[n_subset:], :]
-    
-    Y_train_hf_l = Y_hf_train[:, r_index[:n_subset]]
-
-    Y_train_lf_l = Y_lf_train[:, r_index[:n_subset]]
-    Y_train_lf_u = Y_lf_train[:, r_index[n_subset:]]
-    #%%
-
-    cokriging = CoKriging(X_train_l, X_train_u, Y_train_lf_l, Y_train_lf_u, Y_train_hf_l,
-                          xyzi_lf, xyzi_hf, n_features)
-    cokriging.manifold_alignment(select_modes='variance', n_modes_hf=99.9, n_modes_lf=99)
-    cokriging.fit()
-    
-    Y_pred, Y_mse = cokriging.predict(test_par)
-
-    #%%
-
-    def contour_furnace():
-        path_mesh = '/Users/alberto/Documents/Research/Digital_twin_ss/'
-        mesh_data = np.genfromtxt(path_mesh + 'mesh/mesh_data.csv', delimiter=',',
-                                skip_header=1)
-
-        mask = mesh_data[:, 2] < 1e-17
-        n_points = np.sum(mask)
-        contour_data = np.zeros((n_points, 2))
-        contour_data[:, 0] = mesh_data[:, 1][mask]
-        contour_data[:, 1] = mesh_data[:, 3][mask]
-
-        srt_contour_data = np.zeros_like(contour_data)
-        temp = np.copy(contour_data)
-
-        srt_contour_data[0, :] = contour_data[0, :]
-        ind = 0
-
-        for i in range(1, n_points):
-            new_point = srt_contour_data[i-1, :]
-            temp = np.delete(temp, ind, 0)
-
-            dist = new_point-temp
-            dist_norm = np.linalg.norm(dist, axis=1)
-            ind = np.argmin(dist_norm)
-            srt_contour_data[i, :] = temp[ind, :]
-
-        return srt_contour_data
-
-    def plot_contours_tri(xs, ys, zs, cbar_label='', filename=''):
-        triang0 = tri.Triangulation(xs[0], ys[0])
-        triang1 = tri.Triangulation(xs[1], ys[1])
-
-        # contour = contour_furnace()
-        # outline = Polygon(contour)
-        
-        # mask0 = [not outline.contains(Polygon(zip(xs[0][t], ys[0][t]))) 
-        #         for t in triang0.get_masked_triangles()]
-        
-        # mask1 = [not outline.contains(Polygon(zip(xs[1][t], ys[1][t]))) 
-        #         for t in triang1.get_masked_triangles()]
-
-        # triang0.set_mask(mask0)
-        # triang1.set_mask(mask1)
-
-        fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(6,6))
-        
-        z_min = min([np.min(zs[0]), np.min(zs[1])])
-        z_max = max([np.max(zs[0]), np.max(zs[1])])
-    
-        n_levels = 32
-        levels = np.linspace(z_min, z_max, n_levels)
-        cmap_name= 'inferno'
-        
-        for i, ax in enumerate(axs):
-            if i == 0:
-                ax.tricontourf(triang0, zs[i], levels, vmin=z_min, vmax=z_max, cmap=cmap_name)
-                # ax.plot(contour[:,0], contour[:,1], c='k')
-                ax.invert_xaxis()
-            else:
-                ax.tricontourf(triang1, zs[i], levels, vmin=z_min, vmax=z_max, cmap=cmap_name)
-                ax.tick_params(axis='y', which='both', left=False, right=False, labelleft=False) 
-                # ax.plot(contour[:,0], contour[:,1], c='k')
-
-            ax.set_aspect('equal')
-            ax.axes.get_xaxis().set_visible(False)
-            ax.axes.get_yaxis().set_visible(False)
-            
-        fig.subplots_adjust(bottom=0., top=1., left=0., right=0.85, wspace=0.02, hspace=0.02)
-        start = axs[1].get_position().bounds[1]
-        height = axs[1].get_position().bounds[3]
-        
-        cb_ax = fig.add_axes([0.9, start, 0.05, height])
-        cmap = mpl.cm.get_cmap(cmap_name, n_levels)
-        norm = mpl.colors.Normalize(vmin=z_min, vmax=z_max)
-        
-        text = cb_ax.yaxis.label
-        font = mpl.font_manager.FontProperties(size=16)
-        text.set_font_properties(font)
-
-        cbformat = mpl.ticker.ScalarFormatter(useMathText=True)   # create the formatter
-        cbformat.set_powerlimits((-3, 4))
-
-        cb_ax.tick_params(labelsize=14)
-        cb_ax.yaxis.offsetText.set_fontsize(14)
-        fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cb_ax, 
-                    orientation='vertical', label=cbar_label, format=cbformat)
-        
-        if filename != '':
-            fig.savefig(filename, transparent=True, dpi=600, bbox_inches='tight')    
-        
-        plt.show()
-
-    str_ind = 'T'
-    ind = features.index(str_ind)
-
-    eps = 5e-2
-    mask_plot = (xyzi_hf[:,1] < eps) & (xyzi_hf[:,2] > 0)
-
-    x_plot_test = Y_hf_test[ind*n_cells_hf:(ind+1)*n_cells_hf,3][mask_plot]
-    x_plot_pred = Y_pred[ind*n_cells_hf:(ind+1)*n_cells_hf,3][mask_plot]
-    plot_contours_tri([xyzi_hf[:,0][mask_plot], xyzi_hf[:,0][mask_plot]], [xyzi_hf[:,2][mask_plot],xyzi_hf[:,2][mask_plot]], 
-                        [x_plot_test, x_plot_pred])
     
