@@ -6,17 +6,17 @@ import matplotlib.pyplot as plt
 class TestGPR:
 
     def setup_method(self, method):
-        self.n_points = 20
-        self.n_features = 1
-        self.m = 10
+        self.n_points = 20  # number of "grid points"
+        self.n_features = 1 # number of features
+        self.m = 10  # number of "snapshots"
         
-        self.P = np.linspace(0, 1, 2*self.m)[:, np.newaxis]
-        self.V = 10*np.sin(2*np.pi*self.P)
-        self.V = self.V/np.linalg.norm(self.V)
+        self.P = np.linspace(0, 1, 2*self.m)[:, np.newaxis]  # input parameters
+        self.V = 10*np.sin(2*np.pi*self.P)   # target variable
+        self.V = self.V/np.linalg.norm(self.V) #  normalisation
 
-        Sigma = 100
+        Sigma = 100 
 
-        self.U = np.zeros((self.n_points*self.n_features, 1))
+        self.U = np.zeros((self.n_points*self.n_features, 1))  # create the U mapping
         self.U[:, 0] = np.arange(1, self.U.shape[0]+1)
         self.U = self.U/np.linalg.norm(self.U)
         
