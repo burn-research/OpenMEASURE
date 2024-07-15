@@ -13,10 +13,26 @@ MODULE: dgpr.py
 import copy
 import torch
 import gpytorch
+from gpytorch.variational import CholeskyVariationalDistribution, VariationalStrategy 
 import numpy as np
 from .sparse_sensing import ROM
 from .gpr import ExactGPModel
 from scipy.integrate import BDF
+from torch.utils.data import DataLoader, TensorDataset
+class VariationalGPModel(gpytorch.models.ApproximateGP):
+    def __init__(self, inducing_points, mean, kernel):
+        
+        variational_distribution = CholeskyVariationalDistribution(inducing_points.size(0))
+        variational_strategy = VariationalStrategy(self, inducing_points, variational_distribution, learn_inducing_locations=True)
+        super(VariationalGPModel, self).__init__(variational_strategy)
+        
+        self.mean_module = mean
+        self.covar_module = kernel
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        kernel_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, kernel_x)
 
 class dGPR(ROM):
     '''
@@ -343,7 +359,7 @@ class dGPR(ROM):
         return Vr_dot_pred/self.scale_cst, Vr_dot_sigma/self.scale_cst
     
     def forecast(self, Vr_start, n_timesteps, n_paths, dt_fc, 
-                 method='euler-maruyama'):
+                 method='euler-maruyama', noise_coeff=1.):
         '''
         Forecast an ensamble in the future. 
         
@@ -365,6 +381,10 @@ class dGPR(ROM):
             The method used to integrate the SDE. The default is
             the Euler-Maruyama method.
         
+        noise_coeff: float, optional
+            Multiplicative coefficient for the noise level. 
+            The default is 1.
+            
         Returns
         -------
         Vr_fc : numpy array
@@ -376,8 +396,7 @@ class dGPR(ROM):
         Vr_fc[0, :, :] = Vr_start
 
         rng = np.random.default_rng()        
-        # dW = rng.normal(scale=np.sqrt(dt_fc), size=(Vr_fc.shape))
-        dW = rng.normal(scale=dt_fc, size=(Vr_fc.shape))
+        dW = noise_coeff*np.sqrt(dt_fc)*rng.normal(scale=1, size=(Vr_fc.shape))
 
         for i in range(n_timesteps-1):
             if method == 'euler-maruyama':
@@ -484,3 +503,176 @@ class dGPR(ROM):
             v_bdf.append(bdf.y)
             
         return np.array(t_bdf), np.array(v_bdf)
+    
+class dGPR_vi(dGPR):
+    '''
+    Class used for building a GPR-based ROM of a dynamical system.
+    
+    Attributes
+    ----------
+    X : numpy array
+        data matrix of dimensions (n,p) where n = n_features * n_points and p
+        is the number of snapshots.
+        
+    X_dot : numpy array
+        data matrix of dimensions (n,p) containing the time derivative of the
+        matrix X.
+
+    dt = float
+        time interval between the snapshots in seconds.
+
+    n_features : int
+        the number of features in the dataset (temperature, velocity, etc.).
+    
+    xyz : numpy array
+        3D position of the data in X, size (nx3).
+         
+        
+    Methods
+    ----------
+    
+    fit()
+        Fit the ROM model.
+    
+    '''
+    def __init__(self, X, X_dot, dt, n_features, xyz):
+        super().__init__(X, X_dot, dt, n_features, xyz)
+    
+    
+    def _train_loop(self, model, likelihood, i):
+        model.train()
+        likelihood.train()
+    
+        train_dataset = TensorDataset(self.Vr_torch, self.Vr_dot_torch[:,i])
+        train_loader = DataLoader(train_dataset, batch_size=self.n_batch, shuffle=True)
+
+        optimizer = torch.optim.Adam([{'params': model.parameters()},
+                    {'params': likelihood.parameters()}], lr=self.lr)
+        mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=self.Vr_dot_torch.size(0))
+
+        for e in range(self.n_epochs):
+            for Vr_batch, Vr_dot_batch in train_loader:
+        
+                optimizer.zero_grad()
+                output = model(Vr_batch)
+                loss = -mll(output, Vr_dot_batch)
+                loss.backward()
+                if self.verbose == True:
+                    noise_avg = np.mean(likelihood.noise.detach().numpy())
+                    print(f'Epoch {e+1:d}/{self.n_epochs:d} - Mode: {i+1:d}/{self.r:d} - Loss: {loss.item():.2e} - ' \
+                    f'Mean noise: {noise_avg:.2e}')
+                        
+                optimizer.step()
+                
+        Vr_sigma = model(self.Vr_torch).stddev.detach().numpy()
+        
+        return model, likelihood, Vr_sigma
+    
+    def train(self, V_dot_sigma=1, n_samples=None, n_batch=256, n_epochs=100, 
+              mean=None, kernel=None, likelihood=None, 
+              lr=0.1, verbose=False):
+        '''
+        Train the GPR model.
+        Return the model and likelihood.
+
+        Parameters
+        ----------
+        n_samples : int, optional.
+            If passed, the GPR is trained on a random subset with size n_samples.
+
+        mean : gpytorch.means, optional.
+            The mean passed to the GPR model. The default is means.ConstantMean.
+
+        kernel : gpytorch.kernels, optional.
+            The kernel used for the computation of the covariance matrix. The default
+            is the Matern kernel.
+
+        likelihood : gpytorch.likelihoods, optional
+            The likelihood passed to the GPR model. If gpr_type='SingleTask', the default 
+            is GaussianLikelihood(). If gpr_type='MultiTask', the MultitaskGaussianLikelihood()
+            is the only option.
+        
+        max_iter : int, optional
+            Maximum number of iterations to train the hyperparameters. The default
+            is 1000.
+            
+        rel_error : float, optional
+            Minimum relative error below which the training of hyperparameters is
+            stopped. The default is 1e-5.
+        
+        lr : float, optional
+            Learning rate of the Adam optimizer used for minimizing the negative log 
+            likelihood. The default is 0.1.
+
+        verbose : bool, optional
+            If True, it will print informations on the training of the hyperparameters.
+            The default is False.
+            
+
+        Returns
+        -------
+        model : gpytorch.models
+            The trained gpr model.
+
+        likelihood : gpytorch.likelihoods.
+            The trained likelihood.
+        
+        '''
+        
+        self.lr = lr
+        self.verbose = verbose
+        self.scale_cst = 1.
+        self.n_batch = n_batch
+        self.n_epochs = n_epochs
+        
+        rng_shuffle = np.random.default_rng()
+        index_shuffle = np.arange(self.Vr.shape[0], dtype='int')
+        rng_shuffle.shuffle(index_shuffle)
+        
+        if n_samples is not None:    
+            index_shuffle = index_shuffle[:n_samples]
+        else:
+            n_samples = self.Vr.shape[0]
+
+        self.Vr_torch = torch.from_numpy(self.Vr).contiguous().double()
+        # Vr_sigma_torch = V_dot_sigma*torch.ones_like(Vr_mean_torch).contiguous().double()
+        
+        self.Vr_dot_torch = torch.from_numpy(self.Vr_dot).contiguous().double()
+            
+        models = []
+        likelihoods = []
+
+        self.mean = mean
+        self.kernel = kernel
+        self.likelihood = likelihood
+
+        if mean is None:
+            self.mean = gpytorch.means.ConstantMean()
+        
+        if kernel is None:
+            self.kernel = gpytorch.kernels.ScaleKernel((gpytorch.kernels.RBFKernel()))
+        
+        if likelihood is None:
+            self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
+
+        Vr_dot_sigma = np.zeros_like(self.Vr_dot)
+
+        for i in range(self.r):
+            likelihood = copy.deepcopy(self.likelihood)
+            mean = copy.deepcopy(self.mean)
+            kernel = copy.deepcopy(self.kernel)
+            model = VariationalGPModel(self.Vr_torch[index_shuffle, :], mean, kernel)
+
+            model.double()
+            likelihood.double()
+
+            model, likelihood, Vr_dot_sigma[:, i] = self._train_loop(model, likelihood, i)
+
+            models.append(model)
+            likelihoods.append(likelihood)
+
+        self.Vr_dot_sigma = Vr_dot_sigma
+        self.models = models
+        self.likelihoods = likelihoods
+        
+        return models, likelihoods
