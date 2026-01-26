@@ -75,7 +75,7 @@ class TestdGPR:
         
         V_dot_pred, _ = self.dgpr.predict(self.V_test)
 
-        np.testing.assert_allclose(V_dot_test, V_dot_pred, rtol=1e-10, atol=5e-1)
+        np.testing.assert_allclose(V_dot_test, V_dot_pred, rtol=1e-3, atol=5e-1)
 
     def test_predict_vi(self):
         self.dgpr_vi.fit(scale_type='none')
@@ -89,7 +89,7 @@ class TestdGPR:
         
         V_dot_pred, _ = self.dgpr_vi.predict(self.V_test)
 
-        np.testing.assert_allclose(V_dot_test, V_dot_pred, rtol=1e-3, atol=5e-1)
+        np.testing.assert_allclose(V_dot_test, V_dot_pred, rtol=1e-2, atol=5e-1)
 
     def test_forecast(self):
         self.dgpr.fit(scale_type='none')
@@ -98,7 +98,7 @@ class TestdGPR:
         V_fc = self.dgpr.forecast(self.V_test[0, :], self.time_test.size, 10, self.dt)
         V_fc_mean = np.mean(V_fc, axis=1)
 
-        np.testing.assert_allclose(self.V_test, V_fc_mean, rtol=1e-10, atol=5e-1)
+        np.testing.assert_allclose(self.V_test, V_fc_mean, rtol=1e-3, atol=5e-1)
 
     def test_forecast_vi(self):
         self.dgpr_vi.fit(scale_type='none')

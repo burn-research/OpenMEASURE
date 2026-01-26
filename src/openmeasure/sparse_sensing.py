@@ -103,61 +103,61 @@ class ROM():
 
         '''
         
-        X_cnt = np.zeros((self.X.shape[0], 1))
+        X_cnt = np.average(self.X, axis=axis_cnt)[:, np.newaxis]
+        Xc = self.X - X_cnt        
+        
         X_scl = np.zeros((self.X.shape[0], 1))
         
         for i in range(self.n_features):
-            x = self.X[i*self.n_points:(i+1)*self.n_points, :]
-            
-            X_cnt[i*self.n_points:(i+1)*self.n_points, 0] = np.average(x, axis=axis_cnt)
+            x0 = Xc[i*self.n_points:(i+1)*self.n_points, :]
             
             if scale_type == 'std':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.std(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.std(x0)
             
             elif scale_type == 'none':
                 X_scl[i*self.n_points:(i+1)*self.n_points, 0] = 1.
             
             elif scale_type == 'pareto':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.sqrt(np.std(x))
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.sqrt(np.std(x0))
             
             elif scale_type == 'vast':
-                scl_factor = np.std(x)**2/np.average(x)
+                scl_factor = np.std(x0)**2/np.average(x0)
                 X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             elif scale_type == 'range':
-                scl_factor = np.max(x) - np.min(x)
+                scl_factor = np.max(x0) - np.min(x0)
                 X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
                 
             elif scale_type == 'level':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.average(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.average(x0)
                 
             elif scale_type == 'max':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.max(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.max(x0)
             
             elif scale_type == 'variance':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.var(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.var(x0)
             
             elif scale_type == 'median':
-                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.median(x)
+                X_scl[i*self.n_points:(i+1)*self.n_points, 0] = np.median(x0)
             
             elif scale_type == 'poisson':
-                scl_factor = np.sqrt(np.average(x))
+                scl_factor = np.sqrt(np.average(x0))
                 X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             elif scale_type == 'vast_2':
-                scl_factor = (np.std(x)**2 * kurtosis(x)**2)/np.average(x)
+                scl_factor = (np.std(x0)**2 * kurtosis(x0)**2)/np.average(x0)
                 X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             elif scale_type == 'vast_3':
-                scl_factor = (np.std(x)**2 * kurtosis(x)**2)/np.max(x)
+                scl_factor = (np.std(x0)**2 * kurtosis(x0)**2)/np.max(x0)
                 X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             elif scale_type == 'vast_4':
-                scl_factor = (np.std(x)**2 * kurtosis(x)**2)/(np.max(x)-np.min(x))
+                scl_factor = (np.std(x0)**2 * kurtosis(x0)**2)/(np.max(x0)-np.min(x0))
                 X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             elif scale_type == 'l2-norm':
-                scl_factor = np.linalg.norm(x)
+                scl_factor = np.linalg.norm(x0)
                 X_scl[i*self.n_points:(i+1)*self.n_points, 0] = scl_factor
             
             else:
@@ -166,7 +166,7 @@ class ROM():
         self.X_cnt = X_cnt
         self.X_scl = X_scl
         
-        X0 = (self.X - X_cnt)/X_scl
+        X0 = Xc / X_scl
 
         return X0
 

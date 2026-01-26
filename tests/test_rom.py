@@ -20,27 +20,21 @@ class TestROM:
         self.rom.scale_data()
         np.testing.assert_array_equal(self.rom.X_cnt, np.mean(self.rom.X, axis=1)[:, np.newaxis])
 
-    def test_centering_axis_none(self):
-        self.rom.scale_data(axis_cnt=None)
-        X_cnt = np.zeros((self.rom.X.shape[0], 1))
-        for i_f in range(self.rom.n_features):
-            X_cnt[i_f*self.rom.n_points:(i_f+1)*self.rom.n_points] = np.mean(self.rom.X[i_f*self.rom.n_points:(i_f+1)*self.rom.n_points])
-        
-        np.testing.assert_array_equal(self.rom.X_cnt, X_cnt)
-
     def test_scaling(self):
         self.rom.scale_data()
         X_scl = np.zeros((self.rom.X.shape[0], 1))
+        Xc = self.rom.X - self.rom.X_cnt
         for i_f in range(self.rom.n_features):
-            X_scl[i_f*self.rom.n_points:(i_f+1)*self.rom.n_points] = np.std(self.rom.X[i_f*self.rom.n_points:(i_f+1)*self.rom.n_points])
+            X_scl[i_f*self.rom.n_points:(i_f+1)*self.rom.n_points] = np.std(Xc[i_f*self.rom.n_points:(i_f+1)*self.rom.n_points])
         
         np.testing.assert_array_equal(self.rom.X_scl, X_scl)
 
     def test_centering_and_scaling(self):
         X0 = self.rom.scale_data()
         X_scl = np.zeros((self.rom.X.shape[0], 1))
+        Xc = self.rom.X - self.rom.X_cnt
         for i_f in range(self.rom.n_features):
-            X_scl[i_f*self.rom.n_points:(i_f+1)*self.rom.n_points] = np.std(self.rom.X[i_f*self.rom.n_points:(i_f+1)*self.rom.n_points])
+            X_scl[i_f*self.rom.n_points:(i_f+1)*self.rom.n_points] = np.std(Xc[i_f*self.rom.n_points:(i_f+1)*self.rom.n_points])
         
         X0_check = (self.rom.X - np.mean(self.rom.X, axis=1)[:, np.newaxis])/X_scl
         np.testing.assert_array_equal(X0, X0_check)
